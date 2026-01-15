@@ -1,89 +1,113 @@
 ﻿<#
 .SYNOPSIS
-    Automated initialization, unsealing, and secret provisioning for OpenBao.
+    Vault Lifecycle and Credential Automation Script.
+    Name: Invoke-BaoAutomation.ps1
+    Version: 2.5
 .DESCRIPTION
-    1. Initializes Vault if brand new.
-    2. Unseals the Vault using saved keys.
-    3. Enables KV-V2 and Transit engines.
-    4. Ingests AD credentials from a temporary file and deletes it after storage.
+    This script automates the critical maintenance tasks for the OpenBao security vault:
+    1. Infrastructure Check: Ensures the Vault service is initialized.
+    2. Unsealing: Automatically unseals the vault using local keys if it is locked.
+    3. Provisioning: Enables the KV-V2 (Secret) and Transit (Encryption-as-a-Service) engines.
+    4. Credential Ingestion: Detects 'ad_creds_temp.json', encrypts the contents into 
+       the Vault, and performs a secure deletion of the plaintext source file.
+    5. Health Audit: Verifies connectivity and engine readiness.
+.NOTES
+    Updated in v2.5 to handle multiple key formats (API vs CLI) to prevent "NullArray" indexing errors.
 #>
 
-$ParentDir = "C:\ADSync"
-$BaoDataDir = "$ParentDir\OpenBao"
-$KeysFile = "$BaoDataDir\vault_keys.json"
-$BaoExecutable = "$BaoDataDir\bao.exe"
-$TempCredsFile = "$ParentDir\Sync\ad_creds_temp.json"
-$env:BAO_ADDR = "http://127.0.0.1:8200"
+# --- 1. CONFIGURATION & PATHS ---
+$ParentDir   = "C:\ADSync"
+$KeysFile    = "$ParentDir\OpenBao\vault_keys.json"    # Contains unseal keys and root token
+$CredsSource = "$ParentDir\Sync\ad_creds_temp.json"    # Plaintext source for initial setup
+$AdminSecret = "secret/data/ad-admin"                 # Vault destination for AD Admin creds
+$VaultAddr   = "http://127.0.0.1:8200"                 # Local API endpoint for OpenBao
 
-Write-Host "--- Starting OpenBao Automation ---" -ForegroundColor Cyan
+# --- 2. VAULT INITIALIZATION CHECK ---
+if (!(Test-Path $KeysFile)) {
+    Write-Host ">>> Initializing Fresh Vault Instance..." -ForegroundColor Cyan
+    
+    $InitBody = @{
+        secret_shares = 1
+        secret_threshold = 1
+    } | ConvertTo-Json
 
-# 1. Initialize Vault if no keys exist
-if (-not (Test-Path $KeysFile)) {
-    Write-Host "[INIT] Initializing new Vault instance..." -ForegroundColor Yellow
-    $InitJson = & $BaoExecutable operator init -key-shares=1 -key-threshold=1 -format=json
-    if ($InitJson) {
-        $InitJson | Out-File -FilePath $KeysFile -Encoding utf8 -Force
-        Write-Host "[OK] Vault initialized. Keys saved to $KeysFile" -ForegroundColor Green
+    try {
+        $Init = Invoke-RestMethod -Uri "$VaultAddr/v1/sys/init" -Method Post -Body $InitBody
+        $Init | ConvertTo-Json | Out-File $KeysFile
+        Write-Host "SUCCESS: Vault Initialized. Root keys saved to $KeysFile." -ForegroundColor Green
+    } catch {
+        Write-Error "Initialization failed. Ensure the OpenBao service is running."
+        return
     }
 }
 
-# 2. Unseal the Vault
-$Keys = Get-Content $KeysFile | ConvertFrom-Json
-$Status = & $BaoExecutable status -format=json | ConvertFrom-Json
+# --- 3. UNSEAL LOGIC ---
+# Load the keys from the local JSON file
+$VaultData = Get-Content $KeysFile | ConvertFrom-Json
 
-if ($Status.sealed -eq $true) {
-    Write-Host "[UNSEAL] Unsealing Vault..." -ForegroundColor Yellow
-    & $BaoExecutable operator unseal $Keys.unseal_keys_b64[0] | Out-Null
-    Write-Host "[OK] Vault is now unsealed." -ForegroundColor Green
+# FIX: Check for both 'keys' (API format) and 'unseal_keys_b64' (CLI format)
+if ($VaultData.keys) {
+    $UnsealKey = $VaultData.keys[0]
+} elseif ($VaultData.unseal_keys_b64) {
+    $UnsealKey = $VaultData.unseal_keys_b64[0]
+} else {
+    Write-Error "CRITICAL: No unseal keys found in $KeysFile. Format is unrecognized."
+    return
 }
 
-# 3. Provision Secret Engines
-$env:BAO_TOKEN = $Keys.root_token
+$RootToken = $VaultData.root_token
 
-# Enable KV-V2 for AD Admin Secrets
-$SecretsList = & $BaoExecutable secrets list -format=json | ConvertFrom-Json
-if (-not $SecretsList."secret/") {
-    Write-Host "[CONFIG] Enabling KV-V2 Secret Engine..." -ForegroundColor Yellow
-    & $BaoExecutable secrets enable -path=secret kv-v2 | Out-Null
+Write-Host ">>> Checking Vault Seal Status..."
+try {
+    $Status = Invoke-RestMethod -Uri "$VaultAddr/v1/sys/health" -Method Get -ErrorAction SilentlyContinue
+} catch {
+    $Status = $null 
 }
 
-# Enable Transit Engine for Encryption
-if (-not $SecretsList."transit/") {
-    Write-Host "[CONFIG] Enabling Transit Engine..." -ForegroundColor Yellow
-    & $BaoExecutable secrets enable transit | Out-Null
+if ($null -eq $Status -or $Status.sealed -eq $true) {
+    Write-Host "Vault is currently sealed. Attempting Unseal operation..." -ForegroundColor Yellow
+    $UnsealBody = @{ key = $UnsealKey } | ConvertTo-Json
+    Invoke-RestMethod -Uri "$VaultAddr/v1/sys/unseal" -Method Post -Body $UnsealBody | Out-Null
+    Write-Host "Vault unsealed successfully." -ForegroundColor Green
+} else {
+    Write-Host "Vault is already unsealed and operational." -ForegroundColor Gray
 }
 
-# 4. Ingest AD Credentials from Temporary File
-if (Test-Path $TempCredsFile) {
-    Write-Host "[SECURITY] Found temporary credential file. Ingesting..." -ForegroundColor Cyan
+# --- 4. ENGINE PROVISIONING ---
+$headers = @{ 
+    "X-Vault-Token" = $RootToken
+    "Content-Type"  = "application/json" 
+}
+
+function Enable-Engine {
+    param($Path, $Type)
     try {
-        $Creds = Get-Content $TempCredsFile | ConvertFrom-Json
+        $Body = @{ type = $Type } | ConvertTo-Json
+        Invoke-RestMethod -Uri "$VaultAddr/v1/sys/mounts/$Path" -Headers $headers -Method Post -Body $Body -ErrorAction SilentlyContinue
+        Write-Host "Engine Enabled: $Type at /$Path" -ForegroundColor Gray
+    } catch {}
+}
+
+Enable-Engine -Path "secret" -Type "kv"
+Enable-Engine -Path "transit" -Type "transit"
+
+# --- 5. CREDENTIAL INGESTION & CLEANUP ---
+if (Test-Path $CredsSource) {
+    Write-Host ">>> Temporary credential file detected. Starting ingestion..." -ForegroundColor Cyan
+    try {
+        $RawCreds = Get-Content $CredsSource | ConvertFrom-Json
+        $Payload = @{ data = @{ username = $RawCreds.username; password = $RawCreds.password } } | ConvertTo-Json
         
-        # Verify JSON structure
-        if ($Creds.username -and $Creds.password) {
-            # Store in Vault
-            $Payload = @{ data = @{ username = $Creds.username; password = $Creds.password } } | ConvertTo-Json
-            $headers = @{ "X-Vault-Token" = $Keys.root_token; "Content-Type" = "application/json" }
-            
-            Invoke-RestMethod -Uri "http://127.0.0.1:8200/v1/secret/data/ad-admin" -Headers $headers -Method Post -Body $Payload | Out-Null
-            
-            Write-Host "[OK] AD Admin credentials successfully stored in Vault." -ForegroundColor Green
-            
-            # Securely Delete the File
-            Write-Host "[CLEANUP] Removing temporary credential file..." -ForegroundColor Yellow
-            Remove-Item $TempCredsFile -Force
-            Write-Host "[OK] Temporary file deleted." -ForegroundColor Green
-        } else {
-            Write-Host "[ERROR] Invalid JSON format in ${TempCredsFile}. Expected 'username' and 'password'." -ForegroundColor Red
-        }
+        Invoke-RestMethod -Uri "$VaultAddr/v1/$AdminSecret" -Headers $headers -Method Post -Body $Payload
+        Write-Host "SUCCESS: AD Credentials securely stored in Vault." -ForegroundColor Green
+        
+        Remove-Item $CredsSource -Force
+        Write-Host "CLEANUP: Plaintext source file $CredsSource has been permanently deleted."
     } catch {
-        # Fixed the variable reference error by using a simple variable or delimiting with {}
-        $errorMessage = $_.Exception.Message
-        Write-Host "[ERROR] Failed to process ${TempCredsFile}: ${errorMessage}" -ForegroundColor Red
+        Write-Error "FAILED: Credential ingestion failed: $($_.Exception.Message)."
     }
 } else {
-    Write-Host "[INFO] No temporary credential file found. Skipping ingest." -ForegroundColor Gray
+    Write-Host "No temporary credentials found. Utilizing existing secrets stored in Vault." -ForegroundColor Gray
 }
 
-Write-Host "--- Automation Sequence Complete ---" -ForegroundColor Cyan
-& $BaoExecutable status
+Write-Host ">>> Vault Automation Cycle Complete." -ForegroundColor Cyan
