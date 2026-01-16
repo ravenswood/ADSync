@@ -17,7 +17,8 @@ The system follows a **Source-to-Target** synchronization pattern designed for h
 | :---- | :---- | :---- |
 | Initialize-SyncServer.ps1 | **Infrastructure** | Prepares the Windows environment: creates directories, sets NTFS permissions, installs the OpenBao Windows Service, and configures local firewalls. |
 | Invoke-BaoAutomation.ps1 | **Security** | Automates the Vault lifecycle: initializes the master keys, unseals the vault, enables the Transit engine, and securely ingests AD admin credentials. |
-| Sync-AD-Transport.ps1 | **Engine (v4.2)** | The primary logic driver. Handles AD attribute mapping, group membership reconciliation (with "Create-then-Delete" protection), and the encryption/decryption workflow. |
+| Sync-AD-Transport.ps1 | **Engine (v4.3)** | The primary logic driver. Handles AD attribute mapping, group membership reconciliation, and the asymmetric encryption/decryption workflow. |
+| Update-VaultPassword.ps1 | **Utility** | Interactive script for administrators to manually update a user's password in the Vault and generate a corresponding local log file. |
 
 ## **3\. Cryptographic Security Deep-Dive**
 
@@ -46,7 +47,17 @@ To successfully decrypt the passwords, an attacker would need:
 * The **Key Backup** (transport-key.backup).  
 * The **Vault Unseal Keys** (vault\_keys.json) from either the Source or Target server to unseal a Vault instance and restore the key.
 
-## **4\. Credential Provisioning (ad\_creds\_temp.json)**
+## **4\. Administrative Utilities**
+
+### **Manual Password Updates (Update-VaultPassword.ps1)**
+
+In scenarios where a specific user's password must be changed outside of the automated sync cycle, administrators can use this utility.
+
+* **Functionality:** Prompts for a UserID and a new password (masked input), updates the KV-V2 store in OpenBao, and writes a log file to C:\\ADSync\\Users\\.  
+* **Audit Trail:** Every manual update is logged to the ADSync Windows Event Log (Event ID 2000), capturing the administrator's identity and the timestamp.  
+* **Consistency:** Uses the same pathing and encryption logic as the main engine to ensure the updated password is included in the next Export cycle.
+
+## **5\. Credential Provisioning (ad\_creds\_temp.json)**
 
 To perform AD operations, the system requires a Domain Admin or delegated Service Account.
 
@@ -65,7 +76,7 @@ Create C:\\ADSync\\Sync\\ad\_creds\_temp.json:
 2. **Ingestion:** Invoke-BaoAutomation.ps1 moves credentials into the Vault's internal KV-V2 storage.  
 3. **Cleanup:** The script **permanently deletes** the JSON file once ingested.
 
-## **5\. Account Access Requirements**
+## **6\. Account Access Requirements**
 
 ### **Local Execution Context (Task Scheduler)**
 
@@ -84,15 +95,15 @@ The account stored inside OpenBao requires the following delegated permissions o
 * **Reset Password**  
 * **Read/Write Group Membership**
 
-## **6\. Automation via Scheduled Task**
+## **7\. Automation via Scheduled Task**
 
 1. **Task Name:** AD-Sync-Import.  
 2. **Security:** "Run whether user is logged on or not" \+ "Run with highest privileges".  
-3. **Action:** \- **Program:** powershell.exe  
+3. **Action:** \* **Program:** powershell.exe  
    * **Arguments:** \-ExecutionPolicy Bypass \-File "C:\\ADSync\\Sync-AD-Transport.ps1"  
    * **Start in:** C:\\ADSync
 
-## **7\. Setup & Operation Workflow**
+## **8\. Setup & Operation Workflow**
 
 ### **Phase 1: Preparation (Both Servers)**
 
@@ -110,7 +121,7 @@ The account stored inside OpenBao requires the following delegated permissions o
 2. **Transfer:** Move C:\\ADSync\\Export contents to Target's C:\\ADSync\\Import.  
 3. **Target:** The Scheduled Task processes the files (auto-detects Import mode).
 
-## **8\. AD Hardening & Safety**
+## **9\. AD Hardening & Safety**
 
 * **CannotChangePassword:** Set to True to maintain sync parity.  
 * **PasswordNeverExpires:** Set to True to prevent lockout.  
