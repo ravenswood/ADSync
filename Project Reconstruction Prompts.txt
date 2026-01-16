@@ -1,0 +1,42 @@
+﻿Project Reconstruction Prompts: Secure AD Sync
+This document contains a series of prompts designed to recreate the "Secure Multi-Server AD Sync" system. Use these in order to build the infrastructure, the security layer, the core engine, and the transport utilities.
+Phase 1: Infrastructure & Environment Hardening
+Objective: Establish the directory structure, security permissions, and the OpenBao service.
+Prompt 1: > "Act as a Senior Systems Architect. Create a PowerShell script named Initialize-SyncServer.ps1 that prepares a Windows Server for a secure AD synchronization project.
+1. Create a directory hierarchy under C:\ADSync including folders for OpenBao, Export, Import, Logs, Users, and Bin.
+2. Implement NTFS hardening: Remove inheritance and grant 'Full Control' only to the local 'Administrators' group and the 'SYSTEM' account.
+3. Register a custom Windows Event Log named 'ADSync' with a source 'ADSyncScript'.
+4. If bao.exe exists in the OpenBao folder, register it as a Windows Service using sc.exe with a local loopback listener on port 8200 and auto-start capability.
+5. Configure Windows Firewall rules to allow TCP port 8200 (inbound loopback), port 22 (inbound SSH for SFTP), and outbound ports for Active Directory communication (389, 636, 3268, 3269, 445, 88)."
+Phase 2: Security & Vault Automation
+Objective: Automate the lifecycle of the OpenBao vault, including unsealing and secret ingestion.
+Prompt 2:
+"Create a PowerShell script named Invoke-BaoAutomation.ps1 to manage the OpenBao vault lifecycle.
+1. Check if the vault is initialized; if not, initialize it and save the root token/unseal keys to C:\ADSync\OpenBao\vault_keys.json.
+2. Implement logic to unseal the vault automatically using the keys from the JSON file (supporting both API and CLI JSON formats).
+3. Enable the 'KV-V2' secrets engine at secret/ and the 'Transit' encryption engine at transit/.
+4. Add a 'Credential Ingestion' feature: If a file named ad_creds_temp.json exists in C:\ADSync\Sync\, read the username and password, store them securely in the vault at secret/data/ad-admin, and then permanently delete the plaintext file."
+Phase 3: The Core Sync Engine
+Objective: Build the main logic for exporting and importing AD data with asymmetric encryption.
+Prompt 3:
+"Develop a robust PowerShell engine named Sync-AD-Transport.ps1 for synchronizing AD users and groups.
+1. Configuration: Map LDAP attributes (DisplayName, Email, Manager, etc.) and define paths for Export/Import.
+2. Security Logic: Use the OpenBao Transit engine with RSA-4096. The script must generate/backup an asymmetric key for transport.
+3. Export Mode: Scan a Target OU, generate/fetch passwords in the Vault, asymmetrically encrypt them, and package everything into a JSON payload. Sign the payload using HMAC-SHA256 via OpenBao.
+4. Import Mode: Detect the payload in the Import folder, verify the HMAC signature, restore the Transit key from backup, and reconcile the target AD (Create/Update users, sync attributes, manage group memberships).
+5. Cleanup: Delete users and groups on the target server that no longer exist in the source payload. Log all actions to the 'ADSync' Event Log."
+Phase 4: Automated Pull Transport
+Objective: Create the SFTP "Pull" mechanism to automate data transfer.
+Prompt 4:
+"Create a PowerShell script named Receive-ADSyncPayload.ps1 that acts as a secure transport utility using the WinSCP .NET Assembly.
+1. Implement a 'Pull' model where the target server connects to a source server via SFTP (Port 22).
+2. Use a lock-file mechanism to prevent re-entrancy (multiple instances running at once).
+3. Download the three critical files from the source: the JSON state, the HMAC signature, and the Key Backup.
+4. Once the transfer is complete, automatically trigger the Sync-AD-Transport.ps1 script to begin the import.
+5. Include detailed logging to SFTP_Pull.log and the 'ADSync' Event Log."
+Phase 5: Administrative Tools & Documentation
+Objective: Provide a way for admins to manually override passwords and create a README.
+Prompt 5:
+"Create two final components for the AD Sync project:
+1. A utility script Update-VaultPassword.ps1 that allows an administrator to interactively update a user's password in the OpenBao vault and log the change to a text file and the Event Log.
+2. A comprehensive README.md that explains the system architecture, cryptographic security (RSA-4096 + HMAC), component directory, setup steps, and how to configure the system as a Windows Scheduled Task."
