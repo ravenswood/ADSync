@@ -1,122 +1,116 @@
-# **Secure Multi-Server Active Directory Synchronization**
+# **Master Guide: Secure Multi-Server AD Sync with OpenBao**
 
-**Version 1.2**
-
-This project provides a robust framework for synchronizing Active Directory (AD) users, security groups, and identity attributes between disconnected or air-gapped environments. It leverages **OpenBao** as a centralized security vault to provide "Zero-Knowledge" transport of sensitive credentials.
+This system provides a high-security framework for synchronizing Active Directory users, security groups, and credentials across disconnected (air-gapped) environments. It utilizes a sophisticated "Pull" architecture to minimize the attack surface of the source environment, ensuring that high-trust domains remain isolated from inbound network requests and potential lateral movement from lower-security zones.
 
 ## **1\. System Architecture**
 
-The system follows a **Source-to-Target** synchronization pattern designed for high-security environments where servers cannot communicate directly over a network.
+The workflow is divided into two distinct roles, strategically separated to maintain a strictly one-way flow of information and control:
 
-### **Primary Operational Modes**
+* **Source Server (The Exporter)**: Resides in the primary (source) domain. It performs a comprehensive discovery scan of a designated Organizational Unit (OU), manages user passwords within a local, hardened OpenBao Vault instance, encrypts those secrets via RSA-4096, and generates a cryptographically signed transport package ready for secure retrieval.  
+* **Target Server (The Receiver)**: Resides in the secondary (target) domain. It initiates an outbound "Pull" request via SFTP to retrieve the package from the Source. Upon arrival, it restores the cryptographic twin-context, verifies the payload's structural and cryptographic integrity against the digital signature, and reconciles the Target AD to mirror the source state with precision.
 
-* **Export (Source Server):** Scans a designated Target OU, extracts user metadata, generates secure passwords (if missing), and encrypts all sensitive data into a portable payload.  
-* **Import (Target Server):** Restores the cryptographic environment, verifies the integrity of the payload, decrypts user credentials, and reconciles the local Active Directory to match the source state.
+## **2\. Detailed Script Breakdown**
 
-## **2\. Component Directory**
+### **\[1\] Initialize-ADSyncEnvironment.ps1 (The Architect)**
 
-| File | Role | Description |
-| :---- | :---- | :---- |
-| Initialize-SyncServer.ps1 | **Infrastructure** | Prepares the Windows environment: creates directories, sets NTFS permissions, installs the OpenBao Windows Service, and configures local firewalls. |
-| Invoke-BaoAutomation.ps1 | **Security** | Automates the Vault lifecycle: initializes the master keys, unseals the vault, enables engines, and securely ingests/deletes temporary AD admin credentials. |
-| Sync-AD-Transport.ps1 | **Engine (v4.3)** | The primary logic driver. Handles AD attribute mapping, group membership reconciliation, and the asymmetric encryption/decryption workflow. |
-| Receive-ADSyncPayload.ps1 | **Transport (New)** | **Automated Retrieval:** Securely "pulls" the export package from a remote source via SFTP and automatically triggers the Sync Engine upon successful receipt. |
-| Update-VaultPassword.ps1 | **Utility (New)** | **Admin Override:** Interactive tool for administrators to manually rotate user passwords in the Vault and generate local log receipts. |
+This script serves as the foundational deployment tool and must be executed with Local Administrator privileges on both the Source and Target servers to establish the necessary infrastructure and security guardrails.
 
-## **3\. Cryptographic Security Deep-Dive**
+* **Directory Provisioning**: Creates a hardened folder structure (C:\\ADSync) and applies strict NTFS inheritance rules. By limiting access exclusively to local Administrators and the SYSTEM account, it prevents unauthorized users or service accounts from tampering with binaries, configuration files, or sensitive cryptographic metadata.  
+* **Service Management**: Configures the OpenBao binary as a persistent Windows Service. This setup includes a loopback listener restricted to 127.0.0.1, ensuring the Vault’s REST API is physically unreachable from the external network, thereby neutralizing entire classes of remote web-based attacks.  
+* **Network Hardening**: Automatically provisions granular Windows Firewall rules. It opens inbound Port 22 for the SFTP service and Port 8200 for local API traffic, while simultaneously authorizing outbound ports for critical Active Directory communication (LDAP 389, LDAPS 636, SMB 445 for RPC, and Kerberos 88\) to ensure the engine can communicate reliably with Domain Controllers.  
+* **Vault Bootstrapping**: Orchestrates the first-time "Operator Init" process. It generates the master unseal keys and the root token, which are exported to vault\_keys.json. This file effectively becomes the "keys to the kingdom" and must be protected with the highest level of offline scrutiny or stored in a secure hardware security module (HSM) if available.
 
-The synchronization engine implements a high-entropy security model to ensure that sensitive data remains encrypted even if the physical transport media (USB drive, etc.) is intercepted.
+### **\[2\] Invoke-BaoAutomation.ps1 (The Gatekeeper)**
 
-### **Asymmetric Implementation (RSA-4096)**
+This script manages the daily operational health and initial security provisioning of the OpenBao Vault, ensuring the cryptographic environment is always primed for synchronization.
 
-The system uses the OpenBao **Transit Engine** configured for rsa-4096.
+* **Auto-Unsealing**: Since OpenBao starts in a "sealed" state by default for maximum security, this script reads the vault\_keys.json to programmatically unlock the Vault. This allows the synchronization engine to continue functioning without manual human intervention after a server reboot, power failure, or service restart.  
+* **Engine Lifecycle**: Dynamically provisions and monitors the required storage engines. It sets up the KV-V2 (Key-Value) engine for persistent administrative secrets and the Transit engine to provide high-performance "Encryption-as-a-Service" for user passwords and sensitive attributes.  
+* **Burn-After-Reading Ingestion**: Provides a secure bridge for the initial system configuration. It safely imports administrative credentials from a temporary JSON file into the Vault’s internal, encrypted storage. Once ingestion is confirmed, it performs a secure deletion of the plaintext file, overwriting the disk sectors to ensure the password cannot be recovered via forensic data recovery tools.
 
-* **The Public Key:** Is used by the **Source Server** to encrypt user passwords. Public keys can only encrypt; they cannot be used to reverse the process.  
-* **The Private Key:** Is stored strictly within the **Target Server's** OpenBao instance. This key is required for decryption.
+### **\[3\] Sync-AD-Transport.ps1 (The Engine)**
 
-### **Scenario: What if the Export files are stolen?**
+The core logic engine of the project. It uses sophisticated environment detection to determine its operational mode, allowing a single, auditable codebase to maintain consistency across different server roles.
 
-If an attacker intercepts the C:\\ADSync\\Export folder, they face three massive cryptographic barriers:
+* **v5.2 Logic Enhancements**:  
+  1. **Conditional Password Logging**: The engine now optimizes the audit trail in C:\\ADSync\\Users. A reference .txt file is generated **only when a new password is created** for a user. Existing users synchronized via the Vault do not trigger a new file write, reducing data clutter and exposure.  
+  2. **Expanded Attribute Fidelity**: Synchronizes an enterprise-grade attribute set including Title, Department, EmployeeID, StreetAddress, and MobilePhone alongside core identity data.  
+  3. **Purge-on-Completion**: On the Target server, the script automatically deletes the transport payload, signature, and key backup immediately after a successful import to prevent stale sensitive data from persisting on disk.  
+* **Export Mode Logic**:  
+  1. **Deep Discovery**: Performs a recursive scan of the Source OU to identify all user objects, their metadata, and their corresponding security group hierarchies.  
+  2. **Cryptographic Protection**: For every user identified, it retrieves an existing password or generates a new one. This secret is then encrypted using **RSA-4096** (Asymmetric Encryption). This ensures that even if the transport file is intercepted or stolen, the passwords remain mathematically unreadable without the private key held inside the Target Vault.  
+  3. **Serialization**: Bundles all discovered user attributes, encrypted secrets, and group memberships into a single, compact JSON payload.  
+  4. **Signing**: Generates an **HMAC-SHA256** signature of the entire payload. This acts as a digital tamper-evident seal; if a single bit of the file is modified during transit, the seal breaks and the import is aborted.  
+* **Import Mode Logic**:  
+  1. **Integrity Validation**: Before processing any data, it verifies the HMAC signature. If the signature is invalid, the script terminates immediately to prevent the injection of malicious accounts or corrupt data into the Target AD.  
+  2. **Cryptographic Twin Restoration**: Bridges the air-gap by restoring the Transit Key from the backup blob. This allows the Target Vault to act as a cryptographic twin of the Source, enabling it to decrypt the RSA-4096 ciphertext.  
+  3. **AD Reconciliation**: Decrypts the passwords and applies a full CRUD (Create, Update, Delete) cycle. It creates missing users, synchronizes modified attributes (like job titles or departments), and removes stale accounts that have been deleted from the Source OU to maintain strict parity.  
+  4. **Membership Parity**: Iterates through security groups to ensure user memberships in the Target domain exactly mirror the Source, including the dynamic creation of missing groups within the Target OU.
 
-1. **The RSA Barrier:** The AD\_State\_Export.json contains "Ciphertext". Without the RSA Private Key, this data is mathematically impossible to decrypt.  
-2. **The Transit Key Encryption:** The transport-key.backup file is an encrypted "blob". To restore this key, an attacker would need the **exact same Master Keys** used by the original vault.  
-3. **The Signature Barrier:** The AD\_State\_Export.hmac file ensures integrity. Any attempt to modify the user data in the JSON file will result in an HMAC mismatch, causing the Import script to immediately reject the payload.
+### **\[4\] Receive-ADSyncPayload.ps1 (The Courier)**
 
-## **4\. Administrative Utilities**
+A specialized transport utility that resides exclusively on the **Target Server**, acting as the secure bridge between the two isolated domains.
 
-### **Manual Password Updates (Update-VaultPassword.ps1)**
+* **SFTP Pull Client**: Initiates a secure connection to the Source server via SSH/SFTP. By "Pulling" data into the Target domain rather than "Pushing" out of the Source, the high-security source environment remains completely invisible to inbound network requests, significantly hardening the primary domain against external scanning and lateral movement.  
+* **Transfer Verification**: Rigorously evaluates the successful arrival of the three-part sync package: the JSON user data, the HMAC integrity signature, and the encrypted Transit Key backup blob. It performs file-size and checksum comparisons to ensure the files were not truncated or corrupted during the transfer process.  
+* **Workflow Orchestrator**: Acts as the automation trigger for the entire import sequence. Once the transfer is 100% verified, it automatically launches the local instance of Sync-AD-Transport.ps1, ensuring the absolute minimum latency between data arrival and the update of Active Directory records.
 
-In scenarios where a specific user's password must be changed outside of the automated sync cycle (e.g., emergency rotation), administrators can use this utility.
+### **\[5\] Update-VaultPassword.ps1 (The Override)**
 
-* **Functionality:** Prompts for a UserID and a masked password, updates the KV-V2 store in OpenBao, and writes a reference log to C:\\ADSync\\Users\\.  
-* **Audit Trail:** Every manual update is logged to the ADSync Windows Event Log (Event ID 2000), capturing the administrator's identity.
+An interactive administrative utility designed for emergency scenarios, helpdesk requests, or manual password rotations that fall outside the standard automated sync schedule.
 
-## **5\. Automated Transport (SFTP Pull)**
+* **Secure Manual Rotation**: Provides a protected interface for an authorized administrator to set a specific password for a user within the Vault. This ensures that the administrator never has to touch the Active Directory console directly, maintaining the Vault as the single source of truth for passwords.  
+* **Comprehensive Audit Trail**: Every manual override is logged with a high-resolution timestamp and the administrator’s identity to the Windows Event Log. Additionally, it generates a local reference file in C:\\ADSync\\Users to provide a human-readable audit log of manual interventions outside of the automated flow.
 
-The Receive-ADSyncPayload.ps1 utility automates the transport phase using a pull-based methodology:
+## **3\. Security & Air-Gap Cryptography**
 
-* **Remote Retrieval:** Connects to the Source server via SFTP (Port 22\) using the WinSCP .NET Assembly to fetch new payloads.  
-* **Auto-Execution:** Once the three required components (JSON, HMAC, and Key Backup) are pulled into the local Import folder, the script automatically launches the Sync-AD-Transport.ps1 engine.  
-* **Re-entrancy Protection:** Uses lock files to ensure multiple transfer tasks do not overlap.  
-* **Logging:** Pull results and engine trigger status are reported to SFTP\_Pull.log and the Windows Event Log (Event ID 3001).
+### **Asymmetric Transport Engine**
 
-## **6\. Credential Provisioning (ad\_creds\_temp.json)**
+The system utilizes an **Exportable Transit Engine** configuration to solve the "Key Paradox" often found in disconnected environments:
 
-To perform AD operations, the system requires a Domain Admin or delegated Service Account.
+* **RSA-4096 Military-Grade Encryption**: This provides a massive security margin. Unlike symmetric encryption (like AES), where a shared key must be pre-shared over an insecure channel, this asymmetric approach allows for much more secure and complex trust relationships between isolated servers.  
+* **Key Wrapping & Restoration**: The transport-key is backed up as a "wrapped" encrypted blob. This blob can only be successfully unwrapped and used by a Vault instance that shares the same master initialization parameters. Sync-AD-Transport.ps1 handles this restoration automatically, maintaining cryptographic continuity without the need for manual, insecure key hand-offs.  
+* **HMAC-SHA256 Integrity Seals**: By signing every payload, we ensure that the transport medium (the SFTP server or the network path) does not need to be trusted. Even in a "Total Compromise" scenario of the SFTP server, the Target server will identify that the "seal" on the payload is broken and will refuse to ingest any data.
 
-### **Security Lifecycle**
+## **4\. Account & Permission Requirements**
 
-1. **Creation:** Admin creates the file on Source and Target.  
-2. **Ingestion:** Invoke-BaoAutomation.ps1 moves credentials into the Vault's internal KV-V2 storage.  
-3. **Cleanup:** The script **permanently deletes** the JSON file once ingested.
+### **Scheduled Task Service Account**
 
-## **7\. Account Access Requirements**
+For the system to operate autonomously and reliably, the service account (e.g., SVC\_ADSync) must be granted a specific, audited set of high-privilege rights:
 
-### **Local Execution Context (Task Scheduler)**
+1. **Local Server Permissions**:  
+   * Must be granted the **"Log on as a batch job"** right within the Local Security Policy to allow execution via Task Scheduler.  
+   * Requires **"Full Control"** over the C:\\ADSync directory tree to manage the Vault keys, binary logs, and transport payloads.  
+2. Active Directory Delegation:  
+   The account must be delegated the following specific rights on the Target OU to perform object reconciliation:  
+   * **Create/Delete User & Group Objects**: To manage account lifecycles automatically.  
+   * **Write all properties**: To synchronize crucial metadata like DisplayName, Office location, and Departmental codes.  
+   * **Reset Password**: An absolute requirement to push the decrypted passwords from the Vault into the AD objects.  
+   * **Modify Membership**: Required to manage the member attribute of security groups and ensure group-based access controls are synced.
 
-The account running the Scheduled Task requires:
+## **5\. Implementation Steps**
 
-* **Log on as a batch job** rights.  
-* **Full Control** over C:\\ADSync.  
-* **Local Administrator Privileges**.
+### **Step 1: Initialization**
 
-### **AD Synchronization Context (Vaulted Credentials)**
+1. Ensure the bao.exe binary is correctly placed in C:\\ADSync\\OpenBao.  
+2. Execute Initialize-ADSyncEnvironment.ps1 as a Local Administrator to build the system infrastructure and register the services.
 
-The account stored inside OpenBao requires the following delegated permissions on the **Target OU**:
+### **Step 2: Security Provisioning**
 
-* **Create/Delete User Objects**  
-* **Write All Properties** (for attribute sync)  
-* **Reset Password**  
-* **Read/Write Group Membership**
+1. Place the administrative credentials in ad\_creds\_temp.json within the Sync folder for initial ingestion.  
+2. Execute Invoke-BaoAutomation.ps1. This unseals the vault, prepares the cryptographic engines, and securely ingests the admin credentials before purging the plaintext file.
 
-## **8\. Automation via Scheduled Task**
+### **Step 3: Automation Setup**
 
-1. **Task Name:** AD-Sync-Pull-and-Import.  
-2. **Security:** "Run whether user is logged on or not" \+ "Run with highest privileges".  
-3. **Action:**  
-   * **Program:** powershell.exe  
-   * **Arguments:** \-ExecutionPolicy Bypass \-File "C:\\ADSync\\Receive-ADSyncPayload.ps1"
+Configure the **Windows Task Scheduler** to ensure hands-off, consistent operation:
 
-## **9\. Setup & Operation Workflow**
+* **Source Server**: Schedule Sync-AD-Transport.ps1 (Daily at 01:00 AM) to generate the signed export package.  
+* **Target Server**: Schedule Receive-ADSyncPayload.ps1 (Daily at 02:00 AM) to pull the export package and automatically trigger the import engine.
 
-### **Phase 1: Preparation (Both Servers)**
+## **6\. Audit & Troubleshooting**
 
-1. Copy scripts and bao.exe to C:\\ADSync.  
-2. Run Initialize-SyncServer.ps1 as Administrator.
+All system operations, errors, and successes are audited in the **Windows Event Viewer** under the specialized log **Applications and Services Logs \> ADSync**. This provides a centralized, standard location for monitoring the health and security of the synchronization process.
 
-### **Phase 2: Credential Provisioning**
-
-1. Create ad\_creds\_temp.json.  
-2. Run Invoke-BaoAutomation.ps1 to unseal and ingest.
-
-### **Phase 3: Daily Operation**
-
-1. **Source:** Run Sync-AD-Transport.ps1 (generates Export files in the Export folder).  
-2. **Target:** The Scheduled Task runs Receive-ADSyncPayload.ps1, which pulls the files from Source and automatically kicks off the local Import process.  
-3. **Manual Backup:** In the event of network failure, manually move files from Source Export to Target Import.
-
-## **10\. AD Hardening & Safety**
-
-* **CannotChangePassword:** Set to True to maintain sync parity.  
-* **PasswordNeverExpires:** Set to True to prevent lockout.  
-* **Group Reconciliation (v4.2):** Implements a HashSet keep-list to ensure groups created in the same session are not flagged as "stale" and deleted.
+* **Event ID 1000**: Detailed logs for Core Engine Sync actions (User creates, attribute updates, account deletions).  
+* **Event ID 2000**: Logs for manual password overrides initiated via the Update-VaultPassword tool.  
+* **Event ID 3001**: Detailed status of SFTP transport operations, including connection failures, credential errors, or successful package downloads.

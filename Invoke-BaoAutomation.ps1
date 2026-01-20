@@ -22,60 +22,49 @@ $CredsSource = "$ParentDir\Sync\ad_creds_temp.json"    # Plaintext source for in
 $AdminSecret = "secret/data/ad-admin"                 # Vault destination for AD Admin creds
 $VaultAddr   = "http://127.0.0.1:8200"                 # Local API endpoint for OpenBao
 
-# --- 2. VAULT INITIALIZATION CHECK ---
+# --- 2. SERVICE VERIFICATION ---
+$svc = Get-Service -Name "OpenBao" -ErrorAction SilentlyContinue
+if ($null -eq $svc -or $svc.Status -ne 'Running') {
+    Write-Warning "OpenBao service is not running. Attempting to start..."
+    Start-Service OpenBao -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 5
+}
+
+# --- 3. UNSEALING & AUTHENTICATION ---
 if (!(Test-Path $KeysFile)) {
-    Write-Host ">>> Initializing Fresh Vault Instance..." -ForegroundColor Cyan
-    
-    $InitBody = @{
-        secret_shares = 1
-        secret_threshold = 1
-    } | ConvertTo-Json
-
-    try {
-        $Init = Invoke-RestMethod -Uri "$VaultAddr/v1/sys/init" -Method Post -Body $InitBody
-        $Init | ConvertTo-Json | Out-File $KeysFile
-        Write-Host "SUCCESS: Vault Initialized. Root keys saved to $KeysFile." -ForegroundColor Green
-    } catch {
-        Write-Error "Initialization failed. Ensure the OpenBao service is running."
-        return
-    }
+    Write-Error "CRITICAL: vault_keys.json missing. Run initialization steps first."
+    exit
 }
 
-# --- 3. UNSEAL LOGIC ---
-# Load the keys from the local JSON file
-$VaultData = Get-Content $KeysFile | ConvertFrom-Json
+$Keys = Get-Content $KeysFile | ConvertFrom-Json
+$UnsealKey = ""
 
-# FIX: Check for both 'keys' (API format) and 'unseal_keys_b64' (CLI format)
-if ($VaultData.keys) {
-    $UnsealKey = $VaultData.keys[0]
-} elseif ($VaultData.unseal_keys_b64) {
-    $UnsealKey = $VaultData.unseal_keys_b64[0]
-} else {
-    Write-Error "CRITICAL: No unseal keys found in $KeysFile. Format is unrecognized."
-    return
+# Handle different JSON formats (operator init -format=json output)
+if ($Keys.unseal_keys_b64) {
+    $UnsealKey = $Keys.unseal_keys_b64[0]
+} elseif ($Keys.keys_base64) {
+    $UnsealKey = $Keys.keys_base64[0]
 }
 
-$RootToken = $VaultData.root_token
+if ([string]::IsNullOrEmpty($UnsealKey)) {
+    Write-Error "Could not parse unseal key from $KeysFile."
+    exit
+}
 
-Write-Host ">>> Checking Vault Seal Status..."
+# Perform Unseal via API
+$headers = @{ "Content-Type" = "application/json" }
+$Body = @{ key = $UnsealKey } | ConvertTo-Json
 try {
-    $Status = Invoke-RestMethod -Uri "$VaultAddr/v1/sys/health" -Method Get -ErrorAction SilentlyContinue
+    Invoke-RestMethod -Uri "$VaultAddr/v1/sys/unseal" -Headers $headers -Method Post -Body $Body | Out-Null
+    Write-Host "Vault successfully unsealed." -ForegroundColor Green
 } catch {
-    $Status = $null 
+    Write-Host "Vault already unsealed or failed to unseal." -ForegroundColor Gray
 }
 
-if ($null -eq $Status -or $Status.sealed -eq $true) {
-    Write-Host "Vault is currently sealed. Attempting Unseal operation..." -ForegroundColor Yellow
-    $UnsealBody = @{ key = $UnsealKey } | ConvertTo-Json
-    Invoke-RestMethod -Uri "$VaultAddr/v1/sys/unseal" -Method Post -Body $UnsealBody | Out-Null
-    Write-Host "Vault unsealed successfully." -ForegroundColor Green
-} else {
-    Write-Host "Vault is already unsealed and operational." -ForegroundColor Gray
-}
-
-# --- 4. ENGINE PROVISIONING ---
+# Set Auth Token for subsequent provisioning
+$Token = $Keys.root_token
 $headers = @{ 
-    "X-Vault-Token" = $RootToken
+    "X-Vault-Token" = $Token; 
     "Content-Type"  = "application/json" 
 }
 
@@ -106,8 +95,6 @@ if (Test-Path $CredsSource) {
     } catch {
         Write-Error "FAILED: Credential ingestion failed: $($_.Exception.Message)."
     }
-} else {
-    Write-Host "No temporary credentials found. Utilizing existing secrets stored in Vault." -ForegroundColor Gray
 }
 
-Write-Host ">>> Vault Automation Cycle Complete." -ForegroundColor Cyan
+Write-Host ">>> Vault Lifecycle Tasks Complete." -ForegroundColor Cyan
