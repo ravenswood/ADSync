@@ -69,6 +69,31 @@ if (Test-Path "$ImportDir\$StateFileName") { $Global:Mode = "Import" } else { $G
 
 # --- 4. CORE UTILITY FUNCTIONS ---
 
+function Get-StrongPassword {
+    <#
+    .SYNOPSIS
+        Generates a strong 3-word password using the BIP-39 wordlist.
+    #>
+    [CmdletBinding()]
+    param()
+
+    # 1. Setup local storage
+    $filePath = "$ParentDir\bip39_english.txt"
+
+    # 3. Load words and select 3
+    $wordlist = Get-Content $filePath | Where-Object { $_.Trim() }
+    $selectedWords = $wordlist | Get-Random -Count 3 | ForEach-Object { 
+        (Get-Culture).TextInfo.ToTitleCase($_) 
+    }
+
+    # 4. Generate suffix (Number + Symbol)
+    $number = Get-Random -Minimum 10 -Maximum 99
+    $symbol = "!","@","#","$","%","&" | Get-Random
+
+    # 5. Assemble and Return
+    return ($selectedWords -join "_") + "_$number$symbol"
+}
+
 function Invoke-Bao {
     <#
     .DESCRIPTION
@@ -206,7 +231,8 @@ function Export-ADState {
         $Secret = Invoke-Bao -Method Get -Path "$UserSecretsPath/$($U.SamAccountName)"
         if ($null -eq $Secret) {
             Write-SyncLog "Generating new password for user: $($U.SamAccountName)" -Category "EXPORT"
-            $Pass = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 16 | ForEach-Object { [char]$_ })
+            #$Pass = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 16 | ForEach-Object { [char]$_ })
+            $Pass = Get-StrongPassword
             Invoke-Bao -Method Post -Path "$UserSecretsPath/$($U.SamAccountName)" -Body @{ data = @{ password = $Pass } }
             $Secret = @{ password = $Pass }
             

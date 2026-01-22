@@ -36,6 +36,33 @@ if (!(Test-Path $PasswordLogDir)) {
 
 # --- 3. UTILITY FUNCTIONS ---
 
+function Get-StrongPassword {
+    <#
+    .SYNOPSIS
+        Generates a strong 3-word password using the BIP-39 wordlist.
+    #>
+    [CmdletBinding()]
+    param()
+
+    # 1. Setup local storage
+    $filePath = "$ParentDir\bip39_english.txt"
+
+    # 3. Load words and select 3
+    $wordlist = Get-Content $filePath | Where-Object { $_.Trim() }
+    $selectedWords = $wordlist | Get-Random -Count 3 | ForEach-Object { 
+        (Get-Culture).TextInfo.ToTitleCase($_) 
+    }
+
+    # 4. Generate suffix (Number + Symbol)
+    $number = Get-Random -Minimum 10 -Maximum 99
+    $symbol = "!","@","#","$","%","&" | Get-Random
+
+    # 5. Assemble and Return
+    return ($selectedWords -join "_") + "_$number$symbol"
+}
+
+
+
 function Invoke-Bao {
     <# Standard wrapper for OpenBao API calls #>
     param(
@@ -85,7 +112,9 @@ if ([string]::IsNullOrWhiteSpace($TargetUserID)) {
 # GENERATION LOGIC: Matching Sync-AD-Transport.ps1 (v12.0+)
 # Generates 16-character alphanumeric password
 Write-Host "Generating new secure password for [$TargetUserID]..." -ForegroundColor Gray
-$PlainTextPass = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 16 | ForEach-Object { [char]$_ })
+#$PlainTextPass = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 16 | ForEach-Object { [char]$_ })
+
+$PlainTextPass = Get-StrongPassword
 
 # Check if user already exists in Vault (optional metadata check)
 $VaultPath = "$UserSecretsPath/$TargetUserID"
