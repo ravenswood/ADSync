@@ -2,10 +2,12 @@
 .SYNOPSIS
     Primary Active Directory Synchronization and Secure Transport Script.
     Name: Sync-AD-Transport.ps1
-    Version: 13.8
+    Version: 13.9
     
 .DESCRIPTION
-    v13.8: 
+    v13.9: 
+    - Included deletion of group memberships: Users are now removed from groups
+      that are not specified in the input JSON file.
     - Forced password reset on import: Existing users now have their passwords 
       overwritten with the value from the JSON payload.
     - Maintains Event ID 1000 logging and secure transport logic.
@@ -378,7 +380,21 @@ function Import-ADState {
             }
         }
 
+        # --- GROUP MEMBERSHIP RECONCILIATION ---
         $CurrentGroups = (Get-ADPrincipalGroupMembership -Identity $SU.SamAccountName -Credential $Creds | Select-Object -ExpandProperty Name)
+        
+        # 1. Deletion: Remove user from groups NOT in the input file
+        foreach ($curGrp in $CurrentGroups) {
+            # Skip primary group (usually "Domain Users")
+            if ($curGrp -eq "Domain Users") { continue }
+            
+            if ($curGrp -notin $SU.Groups) {
+                Write-SyncLog "UPDATE USER ($($SU.SamAccountName)): Removing from group '$curGrp' (Not in source)" -Category "CRUD" -Type Warning
+                Remove-ADGroupMember -Identity $curGrp -Members $SU.SamAccountName -Confirm:$false -Credential $Creds -ErrorAction SilentlyContinue
+            }
+        }
+
+        # 2. Addition: Add user to groups IN the input file but not in AD
         foreach ($grp in $SU.Groups) { 
             if ($grp -notin $CurrentGroups) { 
                 Write-SyncLog "UPDATE USER ($($SU.SamAccountName)): Adding to group '$grp'" -Category "CRUD"
