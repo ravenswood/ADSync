@@ -47,6 +47,53 @@ foreach ($Dir in $Paths) {
     }
 }
 
+# --- 2.5 NTFS Hardening ---
+Write-Host "--- Applying NTFS Hardening ---" -ForegroundColor Cyan
+
+$Admins = New-Object System.Security.Principal.NTAccount("BUILTIN", "Administrators")
+$System = New-Object System.Security.Principal.NTAccount("NT AUTHORITY", "SYSTEM")
+
+foreach ($Dir in $Paths) {
+    try {
+        if (Test-Path $Dir) {
+            $Acl = Get-Acl $Dir
+
+            # Disable inheritance and remove inherited permissions
+            $Acl.SetAccessRuleProtection($true, $false)
+
+            # Clear existing explicit rules
+            $Acl.Access | ForEach-Object { $Acl.RemoveAccessRule($_) }
+
+            # Full Control rules
+            $RuleAdmins = New-Object System.Security.AccessControl.FileSystemAccessRule(
+                $Admins,
+                "FullControl",
+                "ContainerInherit,ObjectInherit",
+                "None",
+                "Allow"
+            )
+
+            $RuleSystem = New-Object System.Security.AccessControl.FileSystemAccessRule(
+                $System,
+                "FullControl",
+                "ContainerInherit,ObjectInherit",
+                "None",
+                "Allow"
+            )
+
+            $Acl.AddAccessRule($RuleAdmins)
+            $Acl.AddAccessRule($RuleSystem)
+
+            Set-Acl -Path $Dir -AclObject $Acl
+
+            Write-Host "[LOCKED] NTFS hardened: $Dir" -ForegroundColor Green
+        }
+    }
+    catch {
+        Write-Host "[ERROR] Failed to harden $Dir : $_" -ForegroundColor Red
+    }
+}
+
 # --- 3. OpenBao Configuration & Service Management ---
 $HclStoragePath = ("$ParentDir\OpenBao\data").Replace('\', '/')
 $ConfigLines = @(
