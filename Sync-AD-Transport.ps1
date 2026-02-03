@@ -2,15 +2,19 @@
 .SYNOPSIS
     Primary Active Directory Synchronization and Secure Transport Script.
     Name: Sync-AD-Transport.ps1
-    Version: 13.9
     
 .DESCRIPTION
-    v13.9: 
     - Included deletion of group memberships: Users are now removed from groups
       that are not specified in the input JSON file.
     - Forced password reset on import: Existing users now have their passwords 
       overwritten with the value from the JSON payload.
     - Maintains Event ID 1000 logging and secure transport logic.
+    - Allows filtering of OU on export and import
+    - Automatic seal/unseal
+    - Allows specifying a config on command line
+
+.PARAMETER LibraryPath
+    The config for a specific site
 
 .NOTES
     Target OU: "OU=RBAC,DC=jml,DC=local"
@@ -23,12 +27,11 @@ param (
 
 . "$PSScriptRoot\ADSyncLibrary.ps1"
 
-
 $StateFileName     = "AD_State_Export.json"        
 $SignatureFileName = "AD_State_Export.hmac"        
 $BackupKeyFileName = "transport-key.backup"        
 
-# --- 2. LDAP ATTRIBUTE MAPPING ---
+# --- LDAP ATTRIBUTE MAPPING ---
 $AttrMap = @{
     "DisplayName"     = "displayName"
     "EmailAddress"    = "mail"
@@ -42,7 +45,7 @@ $AttrMap = @{
 
 [string[]]$LdapProperties = $AttrMap.Values | ForEach-Object { $_ }
 
-# --- 3. PREREQUISITE CHECKS ---
+# --- PREREQUISITE CHECKS ---
 if (Test-Path $KeysFile) {
     $BaoToken = (Get-Content $KeysFile | ConvertFrom-Json).root_token
 } else {
@@ -54,7 +57,8 @@ if (!(Test-Path $PasswordLogDir)) { New-Item -ItemType Directory -Path $Password
 
 if (Test-Path "$ImportDir\$StateFileName") { $Global:Mode = "Import" } else { $Global:Mode = "Export" }
 
-# --- 4. CORE UTILITY FUNCTIONS ---
+
+# --- CORE UTILITY FUNCTIONS ---
 
 
 function Initialize-TransitEngine {
@@ -81,7 +85,7 @@ function Initialize-TransitEngine {
     } else {
         if ($null -eq $keyCheck) {
             Write-SyncLog "Generating new RSA-4096 Asymmetric Transport Key..." -Category "TRANSIT"
-            Invoke-RestMethod -Uri "$VaultAddr/v1/transit/keys/transport-key" -Headers $headers -Method Post -Body (@{ type = "rsa-4096"; exportable = $true; allow_plaintext_backup = $true } | ConvertTo-Json)
+            Invoke-RestMethod -Uri "$VaultAddr/v1/transit/keys/transport-key" -Headers $headers -Method Post -Body (@{ type = "rsa-4096"; exportable = $true; allow_plaintext_backup = $true } | ConvertTo-Json) | Out-Null
         }
         $backup = Invoke-RestMethod -Uri "$VaultAddr/v1/transit/backup/transport-key" -Headers $headers -Method Get
         if ($backup.data.backup) { $backup.data.backup | Out-File $KeyBackupPath -Encoding ascii -Force }
@@ -130,7 +134,7 @@ function Unprotect-ADData {
     return [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Result.plaintext))
 }
 
-# --- 5. EXPORT WORKFLOW ---
+# --- EXPORT WORKFLOW ---
 
 function Export-ADState {
     <#
@@ -162,7 +166,7 @@ function Export-ADState {
             $Secret = @{ password = $Pass }
             
             # Save the plain-text password to the user directory for manual reference
-            $UserFilePath = Join-Path $UserLogDir "$($U.SamAccountName).txt"
+            $UserFilePath = Join-Path $PasswordLogDir "$($U.SamAccountName).txt"
             "User: $TargetUserID`r`nGenerated Password: $Pass`r`nDate: $(Get-Date)`r`n" | Out-File -FilePath $UserFilePath -Force
         }
         $RelOU = ($U.DistinguishedName -replace "^CN=[^,]+,","").Replace(",$TargetOU", "").Trim(',')
@@ -209,7 +213,7 @@ function Export-ADState {
     Write-SyncLog "Export complete. State file signed and written." -Category "EXPORT"
 }
 
-# --- 6. IMPORT WORKFLOW ---
+# --- IMPORT WORKFLOW ---
 
 function Import-ADState {
     <#
@@ -354,4 +358,8 @@ function Import-ADState {
     Write-SyncLog "Import and Reconciliation complete." -Category "IMPORT"
 }
 
+Set-BaoStatus Unseal
+
 if ($Global:Mode -eq "Import") { Import-ADState } else { Export-ADState }
+
+Set-BaoStatus Seal

@@ -11,7 +11,7 @@
 $OUExcludeFilters = @(
     "*Staging*",
     "*Testing*",
-    "OU=xBalfour*"
+    "OU=Balfour*"
 )
           
 $TargetOU = "OU=RBAC,DC=jml,DC=local"
@@ -27,10 +27,12 @@ $LogName         = "ADSync"
 $Source          = "ADSyncScript"
 $KeysFile        = "$ParentDir\OpenBao\vault_keys.json"
 $VaultAddr       = "http://127.0.0.1:8200"
-$PasswordLogDir      = "$ParentDir\Users"
+$PasswordLogDir  = "$ParentDir\Users"
 $CredsSource = "$ParentDir\Sync\ad_creds_temp.json" 
 $ExportDir = "$ParentDir\Export"           
 $ImportDir = "$ParentDir\Import" 
+$ConfDir = "$ParentDir\Conf" 
+$BackupDir = "$ParentDir\OpenBao" 
 
 
 $UserSecretsPath = "secret/data/users"
@@ -45,12 +47,15 @@ $Paths = @(
     "$ParentDir\Import",
     "$ParentDir\Logs",
     "$ParentDir\Users",
+    "$ParentDir\Conf",
     "$ParentDir\Bin"
 )
 
 $BaoExe        = "$ParentDir\OpenBao\bao.exe"
 $BaoConfigPath = "$ParentDir\OpenBao\config.hcl"
 
+# --- OpenBao Configuration & Service Management ---
+$HclStoragePath = ("$ParentDir\OpenBao\data").Replace('\', '/')
 $ConfigLines = @(
     'storage "file" {',
     "  path = `"$HclStoragePath`"",
@@ -69,14 +74,15 @@ if (-not [string]::IsNullOrWhiteSpace($LibraryPath)) {
 
     $LibPath = "$LibraryPath.ps1"
     # 2. Verify the file actually exists on disk
-    if (Test-Path -Path "$PSScriptRoot\$LibPath") {
-        Write-SyncLog "Dot-sourcing: $PSScriptRoot\$LibPath" 
+    if (Test-Path -Path "$ConfDir\$LibPath") {
+        Write-SyncLog "Dot-sourcing: $ConfDir\$LibPath" 
         
         # 3. Dot-source the file
-        . "$PSScriptRoot\$LibPath"
+        . "$ConfDir\$LibPath"
     }
     else {
-        Write-SyncLog "The file '$PSScriptRoot\$LibPath' was specified but could not be found." -Type "Error"
+        Write-SyncLog "The file '$ConfDir\$LibPath' was specified but could not be found." -Type "Error"
+        exit 
     }
 }
 
@@ -93,7 +99,7 @@ function Get-StrongPassword {
     $selectedWords = $wordlist | Get-Random -Count 3 | ForEach-Object { (Get-Culture).TextInfo.ToTitleCase($_) }
     $number = Get-Random -Minimum 10 -Maximum 99
     $symbol = "!","@","#","$","%","&" | Get-Random
-    return ($selectedWords -join "_") + "_$number$symbol"
+    return ($selectedWords -join "_") + "_$number-$symbol"
 }
 
 function Invoke-Bao {
@@ -142,4 +148,70 @@ function Write-SyncLog {
         }
         Write-EventLog -LogName $LogName -Source $Source -EntryType $EntryType -EventId $EventID -Message $FormattedMsg
     } catch { }
+}
+
+function Enable-Engine {
+    param($Path, $Type)
+    try {
+        $Body = @{ type = $Type } | ConvertTo-Json
+        Invoke-RestMethod -Uri "$VaultAddr/v1/sys/mounts/$Path" -Headers $headers -Method Post -Body $Body -ErrorAction SilentlyContinue
+        Write-SyncLog "Engine Enabled: $Type at /$Path" 
+    } catch {}
+}
+
+# --- UNSEALING & AUTHENTICATION ---
+
+function Set-BaoStatus {
+    param($Action)
+    if (!(Test-Path $KeysFile)) {
+        Write-SyncLog "CRITICAL: vault_keys.json missing. Run initialization steps first." -Type "Error"
+        exit
+    }
+
+    $Keys = Get-Content $KeysFile | ConvertFrom-Json
+    $UnsealKey = ""
+
+    # Handle different JSON formats (operator init -format=json output)
+    if ($Keys.unseal_keys_b64) {
+        $UnsealKey = $Keys.unseal_keys_b64[0]
+    } elseif ($Keys.keys_base64) {
+        $UnsealKey = $Keys.keys_base64[0]
+    }
+
+    if ([string]::IsNullOrEmpty($UnsealKey)) { 
+        Write-SyncLog "Could not parse $Action key from $KeysFile." -Type "Error"
+        exit
+    }
+
+    # Perform Unseal via API
+    $headers = @{ "Content-Type" = "application/json" }
+    $Body = @{ key = $UnsealKey } | ConvertTo-Json
+
+    try {
+        if ($Action -eq "Seal") {
+            $headers = @{ "X-Vault-Token" = $Keys.root_token }
+            Invoke-RestMethod -Uri "$VaultAddr/v1/sys/seal" -Method Put -Headers $headers | Out-Null
+            Write-SyncLog "Vault Sealed" 
+        }
+        else {
+            if (-not $UnsealKey) { throw "An UnsealKey is required to unseal the vault." }
+            $body = @{ key = $UnsealKey } | ConvertTo-Json
+            Invoke-RestMethod -Uri "$VaultAddr/v1/sys/unseal" -Method Put -Headers $headers -Body $body | Out-Null
+            Write-SyncLog "Vault Unsealed" 
+        }
+
+        # Verify final status
+        $status = Invoke-RestMethod -Uri "$VaultAddr/v1/sys/seal-status" -Method Get | Out-Null
+        return $status | Select-Object sealed, progress, threshold
+      }
+      catch {
+        Write-SyncLog "Operation failed: $_"
+    }
+
+    # Set Auth Token for subsequent provisioning
+    $Token = $Keys.root_token
+    $headers = @{ 
+        "X-Vault-Token" = $Token; 
+        "Content-Type"  = "application/json" 
+    }
 }

@@ -2,7 +2,6 @@
 .SYNOPSIS
     Manual User Password Update Utility for OpenBao.
     Name: Update-VaultPassword.ps1
-    Version: 1.2
     
 .DESCRIPTION
     This utility allows an administrator to manually rotate a user's password 
@@ -18,7 +17,7 @@
 . "$PSScriptRoot\ADSyncLibrary.ps1"
 
 
-# --- 2. PREREQUISITE CHECKS ---
+# --- PREREQUISITE CHECKS ---
 if (Test-Path $KeysFile) {
     $BaoToken = (Get-Content $KeysFile | ConvertFrom-Json).root_token
 } else {
@@ -31,8 +30,7 @@ if (!(Test-Path $PasswordLogDir)) {
     New-Item -ItemType Directory -Path $PasswordLogDir -Force | Out-Null 
 }
 
-# --- 3. UTILITY FUNCTIONS ---
-
+# --- UTILITY FUNCTIONS ---
 
 function Invoke-Bao {
     <# Standard wrapper for OpenBao API calls #>
@@ -56,7 +54,8 @@ function Invoke-Bao {
     }
 }
 
-# --- 4. EXECUTION LOGIC ---
+# --- EXECUTION LOGIC ---
+Set-BaoStatus Unseal
 
 Write-Host "--- OpenBao Automated Password Rotation Utility ---" -ForegroundColor Cyan
 
@@ -108,3 +107,5 @@ if ($null -ne $Result) {
     Write-SyncLog -Msg $ErrorMsg -Type "Error"
     Write-Error $ErrorMsg
 }
+
+Set-BaoStatus Seal

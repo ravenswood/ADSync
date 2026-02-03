@@ -2,7 +2,7 @@
 .SYNOPSIS
     Unified System Preparation & Vault Initialization Script.
     Name: Initialize-ADSyncEnvironment.ps1
-    Version: 5.2
+    
 .DESCRIPTION
     A master script to prepare the AD Sync environment from scratch:
     1. Creates the C:\ADSync directory structure.
@@ -10,19 +10,19 @@
     3. Configures all required Firewall rules (AD, Vault, SSH).
     4. Performs first-time cryptographic initialization (Generating vault_keys.json).
 .NOTES
-    v5.2 Update: Added SSH Port 22 firewall rule and enhanced force-kill logic for bao.exe.
+    If fails on 1st run, run again
 #>
 
 . "$PSScriptRoot\ADSyncLibrary.ps1"
 
 Write-SyncLog "--- Starting Master Initialization ---" 
 
-# --- 1. Event Log Setup ---
+# --- Event Log Setup ---
 if (-not [System.Diagnostics.EventLog]::SourceExists($Source)) {
     try { New-EventLog -LogName $LogName -Source $Source } catch { }
 }
 
-# --- 2. Directory Creation ---
+# --- Directory Creation ---
 foreach ($Dir in $Paths) {
     if (-not (Test-Path $Dir)) {
         New-Item -Path $Dir -ItemType Directory -Force | Out-Null
@@ -30,7 +30,7 @@ foreach ($Dir in $Paths) {
     }
 }
 
-# --- 2.5 NTFS Hardening ---
+# --- NTFS Hardening ---
 Write-SyncLog "--- Applying NTFS Hardening ---" 
 
 $Admins = New-Object System.Security.Principal.NTAccount("BUILTIN", "Administrators")
@@ -77,10 +77,6 @@ foreach ($Dir in $Paths) {
     }
 }
 
-# --- 3. OpenBao Configuration & Service Management ---
-$HclStoragePath = ("$ParentDir\OpenBao\data").Replace('\', '/')
-
-
 try {
     $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllLines($BaoConfigPath, $ConfigLines, $Utf8NoBom)
@@ -126,7 +122,7 @@ if (Test-Path $BaoExe) {
     return
 }
 
-# --- 4. Network Configuration ---
+# --- Network Configuration ---
 Write-SyncLog ">>> Configuring Firewalls..." 
 
 # Active Directory Outbound Ports
@@ -149,10 +145,10 @@ if (!(Get-NetFirewallRule -DisplayName "ADSync-SSH-Inbound" -ErrorAction Silentl
     Write-SyncLog "[OK] SSH Inbound rule (Port 22) configured." 
 }
 
-# --- 5. VAULT CRYPTOGRAPHIC INITIALIZATION ---
+# --- VAULT CRYPTOGRAPHIC INITIALIZATION ---
 Write-SyncLog ">>> Checking Vault Initialization Status..." 
 $env:BAO_ADDR = $VaultAddr
-Start-Sleep -Seconds 5 # Increased wait for service to fully initialize API
+Start-Sleep -Seconds 30 # Increased wait for service to fully initialize API
 
 try {
     $InitStatus = & $BaoExe operator init -status -format=json | ConvertFrom-Json

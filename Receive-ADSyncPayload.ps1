@@ -2,7 +2,6 @@
 .SYNOPSIS
     Secure SFTP Pull Utility for AD Sync Payloads with Auto-Execution.
     Name: Receive-ADSyncPayload.ps1
-    Version: 1.6.4
     
 .DESCRIPTION
     This script is designed for the TARGET server in an air-gapped or disconnected 
@@ -18,13 +17,14 @@
 .PARAMETER SftpHost
     The IP or FQDN of the Source server (Default: 192.168.1.213).
     
-.PARAMETER SftpUser
-    The credentials used for the SFTP session.
+.PARAMETER LibraryPath
+    The config for a specific site
 
 .NOTES
     - Requires WinSCPnet.dll to be present in C:\ADSync\Bin\.
     - The script must be run with sufficient permissions to write to C:\ADSync 
       and execute the secondary Sync-AD-Transport.ps1 script.
+    - ad_creds_temp.json file must contain sftp userid and password for accessing remote
 #>
 
 param (
@@ -34,17 +34,16 @@ param (
 
 . "$PSScriptRoot\ADSyncLibrary.ps1"
 
-# --- 1. GLOBAL CONFIGURATION & PATHING ---
+# --- GLOBAL CONFIGURATION & PATHING ---
 
 $SyncScriptPath  = "$ParentDir\Sync-AD-Transport.ps1" # The engine to trigger after pull
 $WinSCPPath      = "$ParentDir\Bin\WinSCPnet.dll"   # WinSCP .NET Library path
-$LogFile         = "$ParentDir\Logs\SFTP_Pull.log"  # Text-based audit trail
 $LockFile        = "$ParentDir\Logs\sftp_pull.lock" # Semaphore file to prevent double runs
 
 # Remote path on the Source server where Exported payloads are staged
 $RemoteSourcePath = "/$ExportDir/*" # "/C:/ADSync/Export/*"
 
-# --- 3. SAFETY CHECKS & RE-ENTRANCY PROTECTION ---
+# --- SAFETY CHECKS & RE-ENTRANCY PROTECTION ---
 # Check if a lock file exists. This prevents two instances from running if a 
 # previous task is still hung or if the script was triggered manually while scheduled.
 if (Test-Path $LockFile) {
@@ -73,9 +72,11 @@ if (!(Test-Path $ImportDir)) {
     New-Item -ItemType Directory -Path $ImportDir -Force | Out-Null
 }
 
-    $Sftp = Invoke-Bao -Method Get -Path $sftpSecretPath
-    $SftpPass = $Sftp.sftppassword 
-    $SftpUser = $Sftp.sftpUser 
+Set-BaoStatus Unseal
+$Sftp = Invoke-Bao -Method Get -Path $sftpSecretPath
+$SftpPass = $Sftp.sftppassword 
+$SftpUser = $Sftp.sftpUser 
+Set-BaoStatus Seal
 
 # --- 4. CORE EXECUTION BLOCK ---
 try {
@@ -108,6 +109,7 @@ try {
         # Define Transfer Logic (Binary mode ensures no corruption of JSON/HMAC data)
         $transferOptions = New-Object WinSCP.TransferOptions
         $transferOptions.TransferMode = [WinSCP.TransferMode]::Binary
+        $transferOptions.FileMask = "| */"
 
         # Perform the "PULL": Get files from Source and place in local Import folder
         $transferResult = $session.GetFiles($RemoteSourcePath, "$ImportDir\", $false, $transferOptions)
