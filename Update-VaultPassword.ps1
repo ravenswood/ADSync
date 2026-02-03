@@ -15,11 +15,8 @@
                  the main Sync script logic.
 #>
 
-# --- 1. CONFIGURATION ---
-$ParentDir = "C:\ADSync"
-$KeysFile  = "$ParentDir\OpenBao\vault_keys.json"
-$UserSecretsPath = "secret/data/users" # KV-V2 path for user passwords
-$PasswordLogDir  = "$ParentDir\Users"  # Local log for password reference
+. "$PSScriptRoot\ADSyncLibrary.ps1"
+
 
 # --- 2. PREREQUISITE CHECKS ---
 if (Test-Path $KeysFile) {
@@ -36,32 +33,6 @@ if (!(Test-Path $PasswordLogDir)) {
 
 # --- 3. UTILITY FUNCTIONS ---
 
-function Get-StrongPassword {
-    <#
-    .SYNOPSIS
-        Generates a strong 3-word password using the BIP-39 wordlist.
-    #>
-    [CmdletBinding()]
-    param()
-
-    # 1. Setup local storage
-    $filePath = "$ParentDir\bip39_english.txt"
-
-    # 3. Load words and select 3
-    $wordlist = Get-Content $filePath | Where-Object { $_.Trim() }
-    $selectedWords = $wordlist | Get-Random -Count 3 | ForEach-Object { 
-        (Get-Culture).TextInfo.ToTitleCase($_) 
-    }
-
-    # 4. Generate suffix (Number + Symbol)
-    $number = Get-Random -Minimum 10 -Maximum 99
-    $symbol = "!","@","#","$","%","&" | Get-Random
-
-    # 5. Assemble and Return
-    return ($selectedWords -join "_") + "_$number$symbol"
-}
-
-
 
 function Invoke-Bao {
     <# Standard wrapper for OpenBao API calls #>
@@ -72,7 +43,7 @@ function Invoke-Bao {
     )
     $headers = @{ "X-Vault-Token" = $BaoToken; "Content-Type" = "application/json" }
     $params = @{ 
-        Uri = "http://127.0.0.1:8200/v1/$Path"; 
+        Uri = "$VaultAddr/v1/$Path"; 
         Headers = $headers; 
         Method = $Method;
         ErrorAction = "Stop"
@@ -82,19 +53,6 @@ function Invoke-Bao {
         return Invoke-RestMethod @params
     } catch { 
         return $null 
-    }
-}
-
-function Write-SyncLog {
-    <# Log changes to Console and Windows Event Log #>
-    param($Msg, $Type = "Information")
-    $Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    Write-Host "[$Timestamp] [$Type] $Msg"
-    try {
-        # Note: Event Log 'ADSync' and Source 'ADSyncScript' must be pre-registered
-        Write-EventLog -LogName "ADSync" -Source "ADSyncScript" -EntryType $Type -EventId 2000 -Message $Msg
-    } catch {
-        Write-Warning "Could not write to Windows Event Log. Ensure 'ADSync' log source is registered."
     }
 }
 
@@ -109,10 +67,8 @@ if ([string]::IsNullOrWhiteSpace($TargetUserID)) {
     exit
 }
 
-# GENERATION LOGIC: Matching Sync-AD-Transport.ps1 (v12.0+)
-# Generates 16-character alphanumeric password
+
 Write-Host "Generating new secure password for [$TargetUserID]..." -ForegroundColor Gray
-#$PlainTextPass = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 16 | ForEach-Object { [char]$_ })
 
 $PlainTextPass = Get-StrongPassword
 
@@ -144,8 +100,8 @@ if ($null -ne $Result) {
     Write-SyncLog -Msg $LogMsg -Type "Information"
     
     Write-Host "`nRotation Successful!" -ForegroundColor Green
-    Write-Host "New Password: " -NoNewline
-    Write-Host $PlainTextPass -ForegroundColor Yellow
+    #Write-Host "New Password: " -NoNewline
+    #Write-Host $PlainTextPass -ForegroundColor Yellow
     Write-Host "Password logged to: $PassFilePath"
 } else {
     $ErrorMsg = "FAILURE: Could not update password for user [$TargetUserID] in Vault."

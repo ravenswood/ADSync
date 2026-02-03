@@ -15,24 +15,19 @@
     Updated in v2.5 to handle multiple key formats (API vs CLI) to prevent "NullArray" indexing errors.
 #>
 
-# --- 1. CONFIGURATION & PATHS ---
-$ParentDir   = "C:\ADSync"
-$KeysFile    = "$ParentDir\OpenBao\vault_keys.json"    # Contains unseal keys and root token
-$CredsSource = "$ParentDir\Sync\ad_creds_temp.json"    # Plaintext source for initial setup
-$AdminSecret = "secret/data/ad-admin"                 # Vault destination for AD Admin creds
-$VaultAddr   = "http://127.0.0.1:8200"                 # Local API endpoint for OpenBao
+. "$PSScriptRoot\ADSyncLibrary.ps1"
 
 # --- 2. SERVICE VERIFICATION ---
 $svc = Get-Service -Name "OpenBao" -ErrorAction SilentlyContinue
 if ($null -eq $svc -or $svc.Status -ne 'Running') {
-    Write-Warning "OpenBao service is not running. Attempting to start..."
+    Write-SyncLog "OpenBao service is not running. Attempting to start..." -Type "Warning"
     Start-Service OpenBao -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 5
 }
 
 # --- 3. UNSEALING & AUTHENTICATION ---
 if (!(Test-Path $KeysFile)) {
-    Write-Error "CRITICAL: vault_keys.json missing. Run initialization steps first."
+    Write-SyncLog "CRITICAL: vault_keys.json missing. Run initialization steps first." -Type "Error"
     exit
 }
 
@@ -46,8 +41,8 @@ if ($Keys.unseal_keys_b64) {
     $UnsealKey = $Keys.keys_base64[0]
 }
 
-if ([string]::IsNullOrEmpty($UnsealKey)) {
-    Write-Error "Could not parse unseal key from $KeysFile."
+if ([string]::IsNullOrEmpty($UnsealKey)) { 
+    Write-SyncLog "Could not parse unseal key from $KeysFile." -Type "Error"
     exit
 }
 
@@ -56,9 +51,9 @@ $headers = @{ "Content-Type" = "application/json" }
 $Body = @{ key = $UnsealKey } | ConvertTo-Json
 try {
     Invoke-RestMethod -Uri "$VaultAddr/v1/sys/unseal" -Headers $headers -Method Post -Body $Body | Out-Null
-    Write-Host "Vault successfully unsealed." -ForegroundColor Green
+    Write-SyncLog "Vault successfully unsealed." 
 } catch {
-    Write-Host "Vault already unsealed or failed to unseal." -ForegroundColor Gray
+    Write-SyncLog "Vault already unsealed or failed to unseal." 
 }
 
 # Set Auth Token for subsequent provisioning
@@ -73,7 +68,7 @@ function Enable-Engine {
     try {
         $Body = @{ type = $Type } | ConvertTo-Json
         Invoke-RestMethod -Uri "$VaultAddr/v1/sys/mounts/$Path" -Headers $headers -Method Post -Body $Body -ErrorAction SilentlyContinue
-        Write-Host "Engine Enabled: $Type at /$Path" -ForegroundColor Gray
+        Write-SyncLog "Engine Enabled: $Type at /$Path" 
     } catch {}
 }
 
@@ -82,19 +77,24 @@ Enable-Engine -Path "transit" -Type "transit"
 
 # --- 5. CREDENTIAL INGESTION & CLEANUP ---
 if (Test-Path $CredsSource) {
-    Write-Host ">>> Temporary credential file detected. Starting ingestion..." -ForegroundColor Cyan
+    Write-SyncLog ">>> Temporary credential file detected. Starting ingestion..." 
     try {
         $RawCreds = Get-Content $CredsSource | ConvertFrom-Json
         $Payload = @{ data = @{ username = $RawCreds.username; password = $RawCreds.password } } | ConvertTo-Json
         
-        Invoke-RestMethod -Uri "$VaultAddr/v1/$AdminSecret" -Headers $headers -Method Post -Body $Payload
-        Write-Host "SUCCESS: AD Credentials securely stored in Vault." -ForegroundColor Green
+        Invoke-RestMethod -Uri "$VaultAddr/v1/$AdminSecretPath" -Headers $headers -Method Post -Body $Payload
+        Write-SyncLog "SUCCESS: AD Credentials securely stored in Vault"
+
+        $Payload = @{ data = @{ sftpuser = $RawCreds.sftpuser; sftppassword = $RawCreds.sftppassword } } | ConvertTo-Json
         
-        Remove-Item $CredsSource -Force
-        Write-Host "CLEANUP: Plaintext source file $CredsSource has been permanently deleted."
+        Invoke-RestMethod -Uri "$VaultAddr/v1/$sftpSecretPath" -Headers $headers -Method Post -Body $Payload
+        Write-SyncLog "SUCCESS: SFTP Credentials securely stored in Vault"
+                
+#        Remove-Item $CredsSource -Force
+        Write-SyncLog "CLEANUP: Plaintext source file $CredsSource has been permanently deleted."
     } catch {
-        Write-Error "FAILED: Credential ingestion failed: $($_.Exception.Message)."
+        Write-SyncLog "FAILED: Credential ingestion failed: $($_.Exception.Message)." -type "Error"
     }
 }
 
-Write-Host ">>> Vault Lifecycle Tasks Complete." -ForegroundColor Cyan
+Write-SyncLog ">>> Vault Lifecycle Tasks Complete." 

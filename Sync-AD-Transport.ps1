@@ -16,28 +16,13 @@
     Target OU: "OU=RBAC,DC=jml,DC=local"
 #>
 
-$TargetOU = "OU=RBAC,DC=jml,DC=local"
-
-# --- OU EXCLUSION FILTERS ---
-$OUExcludeFilters = @(
-    "*Staging*",
-    "*Testing*",
-    "OU=Balfour*"
+param (
+    [Parameter(Mandatory=$false)]
+    [string]$LibraryPath
 )
 
-# --- 1. GLOBAL CONFIGURATION & FILE PATHS ---
-$ParentDir = "C:\ADSync"
-$ExportDir = "$ParentDir\Export"           
-$ImportDir = "$ParentDir\Import"           
-$UserLogDir = "$ParentDir\Users"           
-$KeysFile  = "$ParentDir\OpenBao\vault_keys.json" 
+. "$PSScriptRoot\ADSyncLibrary.ps1"
 
-# Event Log Configuration
-$LogName = "ADSync"
-$Source = "ADSyncScript"
-
-$UserSecretsPath   = "secret/data/users"                 
-$AdminSecretPath  = "secret/data/ad-admin"              
 
 $StateFileName     = "AD_State_Export.json"        
 $SignatureFileName = "AD_State_Export.hmac"        
@@ -65,74 +50,12 @@ if (Test-Path $KeysFile) {
     exit
 }
 
-if (!(Test-Path $UserLogDir)) { New-Item -ItemType Directory -Path $UserLogDir -Force | Out-Null }
+if (!(Test-Path $PasswordLogDir)) { New-Item -ItemType Directory -Path $PasswordLogDir -Force | Out-Null }
 
 if (Test-Path "$ImportDir\$StateFileName") { $Global:Mode = "Import" } else { $Global:Mode = "Export" }
 
 # --- 4. CORE UTILITY FUNCTIONS ---
 
-function Get-StrongPassword {
-    <#
-    .SYNOPSIS
-        Generates a strong 3-word password using the BIP-39 wordlist.
-    #>
-    [CmdletBinding()]
-    param()
-
-    # 1. Setup local storage
-    $filePath = "$ParentDir\bip39_english.txt"
-
-    # 3. Load words and select 3
-    $wordlist = Get-Content $filePath | Where-Object { $_.Trim() }
-    $selectedWords = $wordlist | Get-Random -Count 3 | ForEach-Object { 
-        (Get-Culture).TextInfo.ToTitleCase($_) 
-    }
-
-    # 4. Generate suffix (Number + Symbol)
-    $number = Get-Random -Minimum 10 -Maximum 99
-    $symbol = "!","@","#","$","%","&" | Get-Random
-
-    # 5. Assemble and Return
-    return ($selectedWords -join "_") + "_$number$symbol"
-}
-
-function Invoke-Bao {
-    <#
-    .DESCRIPTION
-        Wrapper for Invoke-RestMethod to communicate with the OpenBao API.
-    #>
-    param([string]$Method, [string]$Path, [object]$Body = $null)
-    $headers = @{ "X-Vault-Token" = $BaoToken; "Content-Type" = "application/json" }
-    $params = @{ Uri = "http://127.0.0.1:8200/v1/$Path"; Headers = $headers; Method = $Method; ErrorAction = "Stop" }
-    if ($Body) { $params.Body = ($Body | ConvertTo-Json) }
-    try { 
-        $result = Invoke-RestMethod @params
-        if ($result.data.data) { return $result.data.data }
-        return $result.data
-    } catch { return $null }
-}
-
-function Write-SyncLog {
-    <#
-    .DESCRIPTION
-        Writes log entries to the Windows Event Log using Event ID 1000.
-    #>
-    param($Msg, $Type = "Information", $Category = "GENERAL")
-    
-    $EntryType = switch ($Type) {
-        "Warning" { "Warning" }
-        "Error"   { "Error" }
-        Default   { "Information" }
-    }
-
-    $FormattedMsg = "[$Category] $Msg"
-    
-    # Write to Windows Event Log using Event ID 1000
-    Write-EventLog -LogName $LogName -Source $Source -EntryType $EntryType -EventId 1000 -Message $FormattedMsg
-    
-    # Optional: Keep console output for interactive visibility
-    Write-Host "[$EntryType] $FormattedMsg" -ForegroundColor $(if($Type -eq "Warning"){"Yellow"}elseif($Type -eq "Error"){"Red"}else{"Gray"})
-}
 
 function Initialize-TransitEngine {
     <#
@@ -142,7 +65,7 @@ function Initialize-TransitEngine {
     param($KeyBackupPath)
     $headers = @{ "X-Vault-Token" = $BaoToken; "Content-Type" = "application/json" }
     try { 
-        Invoke-RestMethod -Uri "http://127.0.0.1:8200/v1/sys/mounts/transit" -Headers $headers -Method Post -Body (@{ type = "transit" } | ConvertTo-Json) -ErrorAction SilentlyContinue 
+        Invoke-RestMethod -Uri "$VaultAddr/v1/sys/mounts/transit" -Headers $headers -Method Post -Body (@{ type = "transit" } | ConvertTo-Json) -ErrorAction SilentlyContinue 
     } catch { }
 
     $keyCheck = Invoke-Bao -Method Get -Path "transit/keys/transport-key"
@@ -152,15 +75,15 @@ function Initialize-TransitEngine {
             if (Test-Path $KeyBackupPath) {
                 Write-SyncLog "Restoring Transport Key from backup..." -Category "TRANSIT"
                 $BackupBlob = (Get-Content $KeyBackupPath -Raw).Trim()
-                Invoke-RestMethod -Uri "http://127.0.0.1:8200/v1/transit/restore/transport-key" -Headers $headers -Method Post -Body (@{ backup = $BackupBlob } | ConvertTo-Json)
+                Invoke-RestMethod -Uri "$VaultAddr/v1/transit/restore/transport-key" -Headers $headers -Method Post -Body (@{ backup = $BackupBlob } | ConvertTo-Json)
             } else { Write-Error "CRITICAL: Asymmetric key backup missing for Import."; exit }
         }
     } else {
         if ($null -eq $keyCheck) {
             Write-SyncLog "Generating new RSA-4096 Asymmetric Transport Key..." -Category "TRANSIT"
-            Invoke-RestMethod -Uri "http://127.0.0.1:8200/v1/transit/keys/transport-key" -Headers $headers -Method Post -Body (@{ type = "rsa-4096"; exportable = $true; allow_plaintext_backup = $true } | ConvertTo-Json)
+            Invoke-RestMethod -Uri "$VaultAddr/v1/transit/keys/transport-key" -Headers $headers -Method Post -Body (@{ type = "rsa-4096"; exportable = $true; allow_plaintext_backup = $true } | ConvertTo-Json)
         }
-        $backup = Invoke-RestMethod -Uri "http://127.0.0.1:8200/v1/transit/backup/transport-key" -Headers $headers -Method Get
+        $backup = Invoke-RestMethod -Uri "$VaultAddr/v1/transit/backup/transport-key" -Headers $headers -Method Get
         if ($backup.data.backup) { $backup.data.backup | Out-File $KeyBackupPath -Encoding ascii -Force }
     }
 }
@@ -240,7 +163,7 @@ function Export-ADState {
             
             # Save the plain-text password to the user directory for manual reference
             $UserFilePath = Join-Path $UserLogDir "$($U.SamAccountName).txt"
-            $Pass | Out-File -FilePath $UserFilePath -Force
+            "User: $TargetUserID`r`nGenerated Password: $Pass`r`nDate: $(Get-Date)`r`n" | Out-File -FilePath $UserFilePath -Force
         }
         $RelOU = ($U.DistinguishedName -replace "^CN=[^,]+,","").Replace(",$TargetOU", "").Trim(',')
         if ($RelOU -eq $U.DistinguishedName) { $RelOU = "" } 
@@ -259,6 +182,22 @@ function Export-ADState {
         $ExportGroups += @{ Name = $G.Name; SamAccountName = $G.SamAccountName; RelativeOU = $RelOU }
     }
     Write-SyncLog "Collected $($ExportGroups.Count) Groups." -Category "EXPORT"
+
+    if ($OUExcludeFilters -and $OUExcludeFilters.Count -gt 0) {
+        $OUsToRemove = $ExportOUS + $ExportGroups + $ExportUsers | Where-Object {
+            $path = $_.RelativePath
+            $isMatch = $false
+            foreach ($filter in $OUExcludeFilters) { if ($path -like $filter) { $isMatch = $true; break } }
+            $isMatch
+        } | ForEach-Object { $_.RelativePath }
+
+        if ($OUsToRemove.Count -gt 0) {
+            Write-SyncLog "Stripping $($OUsToRemove.Count) excluded OUs from payload." -Category "FILTER"
+            $ExportOUs = $ExportOUs | Where-Object { $_.RelativePath -notin $OUsToRemove }
+            $ExportUsers = $ExportUsers | Where-Object { $_.RelativeOU -notin $OUsToRemove }
+            $ExportGroups = $ExportGroups | Where-Object { $_.RelativeOU -notin $OUsToRemove }
+        }
+    }
 
     $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     $JsonPayload = @{ OUs = $ExportOUs; Users = $ExportUsers; Groups = $ExportGroups } | ConvertTo-Json -Depth 10

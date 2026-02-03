@@ -27,51 +27,22 @@
       and execute the secondary Sync-AD-Transport.ps1 script.
 #>
 
+param (
+    [Parameter(Mandatory=$false)]
+    [string]$LibraryPath
+)
+
+. "$PSScriptRoot\ADSyncLibrary.ps1"
+
 # --- 1. GLOBAL CONFIGURATION & PATHING ---
-# Establish the root working directory and sub-folders
-$ParentDir       = "C:\ADSync"
-$ImportDir       = "$ParentDir\Import"              # Destination for pulled SFTP files
+
 $SyncScriptPath  = "$ParentDir\Sync-AD-Transport.ps1" # The engine to trigger after pull
 $WinSCPPath      = "$ParentDir\Bin\WinSCPnet.dll"   # WinSCP .NET Library path
 $LogFile         = "$ParentDir\Logs\SFTP_Pull.log"  # Text-based audit trail
 $LockFile        = "$ParentDir\Logs\sftp_pull.lock" # Semaphore file to prevent double runs
 
-# Remote Source Connection Details
-$SftpHost        = "192.168.1.213" 
-$SftpPort        = 22
-$SftpUser        = "Administrator"
-$SftpPass        = "xxxxxxxxxx" 
-
 # Remote path on the Source server where Exported payloads are staged
-$RemoteSourcePath = "/C:/ADSync/Export/*"
-
-# --- 2. LOGGING & AUDIT FUNCTION ---
-<#
-.SYNOPSIS
-    Centralized logging function for console, text file, and Windows Event Log.
-#>
-function Write-SyncLog {
-    param(
-        [Parameter(Mandatory=$true)][string]$Msg,
-        [ValidateSet("Information", "Warning", "Error")][string]$Type = "Information"
-    )
-    $Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    
-    # Output to the active PowerShell terminal
-    $Color = switch($Type) { "Error" {"Red"} "Warning" {"Yellow"} Default {"Gray"} }
-    Write-Host "[$Timestamp] [$Type] $Msg" -ForegroundColor $Color
-    
-    # Ensure log directory exists before writing to file
-    if (!(Test-Path "$ParentDir\Logs")) { New-Item -ItemType Directory -Path "$ParentDir\Logs" -Force | Out-Null }
-    "[$Timestamp] [$Type] $Msg" | Out-File $LogFile -Append
-    
-    # Attempt to write to the Windows Event Log (Source: ADSyncScript, Category: ADSync)
-    try {
-        Write-EventLog -LogName "ADSync" -Source "ADSyncScript" -EntryType $Type -EventId 3001 -Message $Msg
-    } catch {
-        # Silent fail if Event Source is not yet registered via Initialize-SyncServer.ps1
-    }
-}
+$RemoteSourcePath = "/$ExportDir/*" # "/C:/ADSync/Export/*"
 
 # --- 3. SAFETY CHECKS & RE-ENTRANCY PROTECTION ---
 # Check if a lock file exists. This prevents two instances from running if a 
@@ -101,6 +72,10 @@ if (!(Test-Path $WinSCPPath)) {
 if (!(Test-Path $ImportDir)) {
     New-Item -ItemType Directory -Path $ImportDir -Force | Out-Null
 }
+
+    $Sftp = Invoke-Bao -Method Get -Path $sftpSecretPath
+    $SftpPass = $Sftp.sftppassword 
+    $SftpUser = $Sftp.sftpUser 
 
 # --- 4. CORE EXECUTION BLOCK ---
 try {

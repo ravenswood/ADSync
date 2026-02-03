@@ -1,4 +1,6 @@
 {
+  "sftpuser": "Administrator",
+  "sftppassword": "xxxxxxxxxx",
   "username": "JML\\Administrator",
   "password": "xxxxxxxxxx"
 }
