@@ -6,20 +6,27 @@
     used by the synchronization suite.
 #>
 
+# Customise this depending on where depoyed
+$TargetOU       = "OU=RBAC,DC=jml,DC=local"   # The OU to be queried or updated
+
+# Remote Source Connection Details
+$SftpHost       = "192.168.1.181"      # Remote SFTP server
+$SftpPort       = 22                   # Default SFTP port
+#"sftpuser": "xxxxxxxxxxxx",           # These should be defined in Sync/ad_creds_temp.json
+#"sftppassword": "xxxxxxxxxx",         # Read once into the vault then file will be deleted
+
+########## No Changes should be needed below this line ###############
 
 # --- OU EXCLUSION FILTERS ---
 $OUExcludeFilters = @(
+    "OU=Balfour*",
+    "OU=Siemens*",
+    "OU=GE*",
+    "OU=GSS*",    
+    "OU=Hitachi*", 
     "*Staging*",
-    "*Testing*",
-    "OU=Balfour*"
+    "*Testing*"
 )
-          
-$TargetOU = "OU=RBAC,DC=jml,DC=local"
-
-# Remote Source Connection Details
-$SftpHost        = "192.168.1.181" 
-$SftpPort        = 22 
-
 
 # --- GLOBAL CONFIGURATION ---
 $ParentDir       = "C:\ADSync"
@@ -28,16 +35,13 @@ $Source          = "ADSyncScript"
 $KeysFile        = "$ParentDir\OpenBao\vault_keys.json"
 $VaultAddr       = "http://127.0.0.1:8200"
 $PasswordLogDir  = "$ParentDir\Users"
-$CredsSource = "$ParentDir\Sync\ad_creds_temp.json" 
-$ExportDir = "$ParentDir\Export"           
-$ImportDir = "$ParentDir\Import" 
-$ConfDir = "$ParentDir\Conf" 
-$BackupDir = "$ParentDir\OpenBao" 
-
-
+$CredsSource     = "$ParentDir\Sync\ad_creds_temp.json" 
+$ExportDir       = "$ParentDir\Export"           
+$ImportDir       = "$ParentDir\Import" 
+$BackupDir       = "$ParentDir\OpenBao" 
 $UserSecretsPath = "secret/data/users"
 $AdminSecretPath = "secret/data/ad-admin"
-$sftpSecretPath = "secret/data/sftpuser"
+$sftpSecretPath  = "secret/data/sftpuser"
 
 $Paths = @(
     "$ParentDir\OpenBao",
@@ -47,7 +51,6 @@ $Paths = @(
     "$ParentDir\Import",
     "$ParentDir\Logs",
     "$ParentDir\Users",
-    "$ParentDir\Conf",
     "$ParentDir\Bin"
 )
 
@@ -69,23 +72,14 @@ $ConfigLines = @(
     'api_addr = "http://127.0.0.1:8200"'
 )
 
-# 1. Check if the config file was provided
-if (-not [string]::IsNullOrWhiteSpace($LibraryPath)) {
-
-    $LibPath = "$LibraryPath.ps1"
-    # 2. Verify the file actually exists on disk
-    if (Test-Path -Path "$ConfDir\$LibPath") {
-        Write-SyncLog "Dot-sourcing: $ConfDir\$LibPath" 
-        
-        # 3. Dot-source the file
-        . "$ConfDir\$LibPath"
-    }
-    else {
-        Write-SyncLog "The file '$ConfDir\$LibPath' was specified but could not be found." -Type "Error"
-        exit 
-    }
-}
-
+# OU Filtering
+# Check if a filter was provided
+if (![string]::IsNullOrWhiteSpace($FilterName)) {
+    Write-Synclog "Filter applied: Removing entries containing '*$FilterName*'" -Category "FILTER"
+    # Filter the array using wildcards before and after the input
+    $OUExcludeFilters = $OUExcludeFilters | Where-Object { $_ -notlike "*$FilterName*" }
+    $ExportDir = "$ParentDir\Export\$FilterName"   
+} 
 
 # --- SHARED FUNCTIONS ---
 

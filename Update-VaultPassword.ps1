@@ -14,6 +14,11 @@
                  the main Sync script logic.
 #>
 
+param (
+    [Parameter(Mandatory=$false)]
+    [string]$TargetUserID
+)
+
 . "$PSScriptRoot\ADSyncLibrary.ps1"
 
 
@@ -59,13 +64,14 @@ Set-BaoStatus Unseal
 
 Write-Host "--- OpenBao Automated Password Rotation Utility ---" -ForegroundColor Cyan
 
-# Prompt for UserID
-$TargetUserID = Read-Host "Enter the UserID (sAMAccountName) to rotate"
 if ([string]::IsNullOrWhiteSpace($TargetUserID)) {
-    Write-Error "UserID cannot be empty."
-    exit
+    # Prompt for UserID
+    $TargetUserID = Read-Host "Enter the UserID (sAMAccountName) to rotate"
+    if ([string]::IsNullOrWhiteSpace($TargetUserID)) {
+        Write-Error "UserID cannot be empty."
+        exit
+    }
 }
-
 
 Write-Host "Generating new secure password for [$TargetUserID]..." -ForegroundColor Gray
 

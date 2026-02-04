@@ -29,7 +29,7 @@
 
 param (
     [Parameter(Mandatory=$false)]
-    [string]$LibraryPath
+    [string]$FilterName = ""
 )
 
 . "$PSScriptRoot\ADSyncLibrary.ps1"
@@ -130,7 +130,7 @@ try {
                 
                 # Using the call operator (&) ensures the sync engine runs in this console
                 # allowing administrators to see progress and real-time logs.
-                & $SyncScriptPath
+                & $SyncScriptPath $FilterName
                 
                 Write-SyncLog "Synchronization engine process completed successfully."
             } else {
