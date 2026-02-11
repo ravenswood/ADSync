@@ -72,14 +72,7 @@ $ConfigLines = @(
     'api_addr = "http://127.0.0.1:8200"'
 )
 
-# OU Filtering
-# Check if a filter was provided
-if (![string]::IsNullOrWhiteSpace($FilterName)) {
-    Write-Synclog "Filter applied: Removing entries containing '*$FilterName*'" -Category "FILTER"
-    # Filter the array using wildcards before and after the input
-    $OUExcludeFilters = $OUExcludeFilters | Where-Object { $_ -notlike "*$FilterName*" }
-    $ExportDir = "$ParentDir\Export\$FilterName"   
-} 
+
 
 # --- SHARED FUNCTIONS ---
 
@@ -209,3 +202,12 @@ function Set-BaoStatus {
         "Content-Type"  = "application/json" 
     }
 }
+
+# OU Filtering
+# Check if a filter was provided
+if (![string]::IsNullOrWhiteSpace($FilterName)) {
+    Write-Synclog "Filter applied: Removing entries containing '*$FilterName*'" -Category "FILTER"
+    # Filter the array using wildcards before and after the input
+    $OUExcludeFilters = $OUExcludeFilters | Where-Object { $_ -notlike "*$FilterName*" }
+    $ExportDir = "$ParentDir\Export\$FilterName"   
+} 

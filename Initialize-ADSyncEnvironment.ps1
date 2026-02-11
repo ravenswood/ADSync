@@ -148,7 +148,7 @@ if (!(Get-NetFirewallRule -DisplayName "ADSync-SSH-Inbound" -ErrorAction Silentl
 # --- VAULT CRYPTOGRAPHIC INITIALIZATION ---
 Write-SyncLog ">>> Checking Vault Initialization Status..." 
 $env:BAO_ADDR = $VaultAddr
-Start-Sleep -Seconds 30 # Increased wait for service to fully initialize API
+Start-Sleep -Seconds 10 # Increased wait for service to fully initialize API
 
 try {
     $InitStatus = & $BaoExe operator init -status -format=json | ConvertFrom-Json

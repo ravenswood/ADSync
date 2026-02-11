@@ -24,13 +24,6 @@ if ($null -eq $svc -or $svc.Status -ne 'Running') {
     Start-Sleep -Seconds 5
 }
 
-Set-BaoStatus Unseal
-Start-Sleep -Seconds 5
-Enable-Engine -Path "secret" -Type "kv"
-Start-Sleep -Seconds 5
-Enable-Engine -Path "transit" -Type "transit"
-Start-Sleep -Seconds 5
-
 # Set Auth Token for subsequent provisioning
 $Keys = Get-Content $KeysFile | ConvertFrom-Json
 $Token = $Keys.root_token
@@ -38,6 +31,9 @@ $headers = @{
     "X-Vault-Token" = $Token; 
     "Content-Type"  = "application/json" 
 }
+Set-BaoStatus Unseal
+Enable-Engine -Path "secret" -Type "kv"
+Enable-Engine -Path "transit" -Type "transit"
 
 # --- CREDENTIAL INGESTION & CLEANUP ---
 if (Test-Path $CredsSource) {
