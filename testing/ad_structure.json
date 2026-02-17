@@ -1,0 +1,72 @@
+[
+  {
+    "Name": "Corporate_HQ",
+    "groups": [
+      {
+        "Name": "All_Employees",
+        "Category": "Security",
+        "Scope": "Global",
+        "members": ["j.doe", "s.clark", "a.tech"]
+      }
+    ],
+    "sub_ous": [
+      {
+        "Name": "Human_Resources",
+        "users": [
+          {
+            "SamAccountName": "s.clark",
+            "FirstName": "Sarah",
+            "LastName": "Clark"
+          }
+        ],
+        "groups": [
+          {
+            "Name": "HR_Managers",
+            "Category": "Security",
+            "Scope": "Global",
+            "members": ["s.clark"]
+          }
+        ]
+      },
+      {
+        "Name": "Information_Technology",
+        "users": [
+          {
+            "SamAccountName": "j.doe",
+            "FirstName": "John",
+            "LastName": "Doe"
+          },
+          {
+            "SamAccountName": "a.tech",
+            "FirstName": "Alex",
+            "LastName": "Tech"
+          }
+        ],
+        "groups": [
+          {
+            "Name": "Domain_Admins_Helper",
+            "Category": "Security",
+            "Scope": "Universal",
+            "members": ["j.doe", "s.clark"] 
+          }
+        ],
+        "sub_ous": [
+          {
+            "Name": "Servers",
+            "groups": [
+              {
+                "Name": "Server_Admins",
+                "Category": "Security",
+                "Scope": "Global",
+                "members": ["a.tech"]
+              }
+            ]
+          },
+          {
+            "Name": "Workstations"
+          }
+        ]
+      }
+    ]
+  }
+]
