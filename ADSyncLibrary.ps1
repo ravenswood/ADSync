@@ -7,7 +7,7 @@
 #>
 
 # Customise this depending on where depoyed
-$TargetOU       = "OU=RBAC,DC=jml,DC=local"   # The OU to be queried or updated
+$BaseOU       = "DC=jml,DC=local"   # The OU to be queried or updated
 
 # Remote Source Connection Details
 $SftpHost       = "192.168.1.181"      # Remote SFTP server
@@ -19,11 +19,11 @@ $SftpPort       = 22                   # Default SFTP port
 
 # --- OU EXCLUSION FILTERS ---
 $OUExcludeFilters = @(
-    "OU=Balfour*",
-    "OU=Siemens*",
-    "OU=GE*",
-    "OU=GSS*",    
-    "OU=Hitachi*", 
+    "*OU=Balfour*",
+    "*OU=Siemens*",
+    "*OU=GE*",
+    "*OU=GSS*",    
+    "*OU=Hitachi*", 
     "*Staging*",
     "*Testing*"
 )
@@ -211,3 +211,14 @@ if (![string]::IsNullOrWhiteSpace($FilterName)) {
     $OUExcludeFilters = $OUExcludeFilters | Where-Object { $_ -notlike "*$FilterName*" }
     $ExportDir = "$ParentDir\Export\$FilterName"   
 } 
+
+# OU Prefix
+# Check if a filter was provided
+if (![string]::IsNullOrWhiteSpace($OUPrefix)) {
+    Write-Synclog "OU Prefix is $OUPrefix" -Category "OU"
+    $TargetOU = "OU=$OUPrefix,$BaseOU"
+    $ExportDir = "$ParentDir\Export\$OUPrefix\$FilterName"   
+} 
+else
+    { $TargetOU = $BaseOU }
+        

@@ -1,62 +1,111 @@
-$DomainRoot = "DC=domain,DC=com"
-$JsonPath = "C:\path\to\ad_structure.json"
-$Config = Get-Content -Path $JsonPath -Raw | ConvertFrom-Json
+Import-Module ActiveDirectory
 
-# Global list to store memberships for Pass 2
-$GlobalMembershipQueue = @()
+# --- CONFIGURATION ---
+$JsonPath = ".\ad_structure.json"
+$LogFile  = ".\AD_Build_Log.txt"
+$TempPass = "TempPass123!" # Users must change this at first logon
 
-function New-ADStructure {
-    param ($OUObject, [string]$ParentPath)
+# --- LOGGING FUNCTION ---
+function Write-Log {
+    param([string]$Message, [string]$Color = "White")
+    $Stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    "[$Stamp] $Message" | Out-File -FilePath $LogFile -Append
+    Write-Host $Message -ForegroundColor $Color
+}
 
-    $OUName = $OUObject.Name
-    $CurrentOUPath = "OU=$OUName,$ParentPath"
+# --- RECURSIVE PROCESSING FUNCTION ---
+function Process-ADStructure {
+    param (
+        [Object]$OUData,
+        [String]$ParentPath
+    )
 
-    # Pass 1a: Create OU
+    # 1. Construct Distinguished Name
+    $CurrentOUPath = "OU=$($OUData.Name),$ParentPath"
+
+    # 2. Create OU (ProtectedFromAccidentalDeletion = $false)
     if (-not (Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$CurrentOUPath'" -ErrorAction SilentlyContinue)) {
-        New-ADOrganizationalUnit -Name $OUName -Path $ParentPath
+        try {
+            New-ADOrganizationalUnit -Name $OUData.Name `
+                                     -Path $ParentPath `
+                                     -ProtectedFromAccidentalDeletion $false `
+                                     -ErrorAction Stop
+            Write-Log "Created OU: $($OUData.Name)" "Cyan"
+        } catch {
+            Write-Log "FAILED to create OU $($OUData.Name): $($_.Exception.Message)" "Red"
+            return # Stop processing this branch if OU creation fails
+        }
+    } else {
+        Write-Log "OU Exists: $($OUData.Name)" "DarkCyan"
     }
 
-    # Pass 1b: Create Users
-    foreach ($User in $OUObject.users) {
+    # 3. Create Groups
+    foreach ($GroupName in $OUData.Groups) {
+        if (-not (Get-ADGroup -Filter "Name -eq '$GroupName'" -ErrorAction SilentlyContinue)) {
+            New-ADGroup -Name $GroupName `
+                        -Path $CurrentOUPath `
+                        -GroupScope Global `
+                        -GroupCategory Security
+            Write-Log "  Created Group: $GroupName" "Yellow"
+        }
+    }
+
+    # 4. Create Users (Disabled & Mapping Names Correctly)
+    foreach ($User in $OUData.Users) {
         if (-not (Get-ADUser -Filter "SamAccountName -eq '$($User.SamAccountName)'" -ErrorAction SilentlyContinue)) {
-            New-ADUser -SamAccountName $User.SamAccountName -GivenName $User.FirstName -Surname $User.LastName `
-                       -Name "$($User.FirstName) $($User.LastName)" -Path $CurrentOUPath -Enabled $true
-        }
-    }
-
-    # Pass 1c: Create Groups and Queue Memberships
-    foreach ($Group in $OUObject.groups) {
-        if (-not (Get-ADGroup -Filter "Name -eq '$($Group.Name)'" -ErrorAction SilentlyContinue)) {
-            New-ADGroup -Name $Group.Name -GroupCategory $Group.Category -GroupScope $Group.Scope -Path $CurrentOUPath
-        }
-        # Store for Pass 2
-        if ($Group.members) {
-            $script:GlobalMembershipQueue += [PSCustomObject]@{
-                GroupName = $Group.Name
-                Members   = $Group.members
+            
+            $SecurePass = ConvertTo-SecureString $TempPass -AsPlainText -Force
+            
+            $UserParams = @{
+                SamAccountName        = $User.SamAccountName
+                Name                  = "$($User.FirstName) $($User.LastName)"
+                DisplayName           = "$($User.FirstName) $($User.LastName)"
+                GivenName             = $User.FirstName # Maps to "First Name"
+                Surname               = $User.LastName  # Maps to "Last Name"
+                Path                  = $CurrentOUPath
+                AccountPassword       = $SecurePass
+                Enabled               = $false # Created as Disabled
+                ChangePasswordAtLogon = $true
             }
+
+            try {
+                New-ADUser @UserParams -ErrorAction Stop
+                Write-Log "    Created User (Disabled): $($User.SamAccountName)" "Green"
+
+                # Add User to Groups
+                foreach ($Group in $User.MemberOf) {
+                    try {
+                        Add-ADGroupMember -Identity $Group -Members $User.SamAccountName -ErrorAction Stop
+                        Write-Log "      Added to Group: $Group" "DarkGray"
+                    } catch {
+                        Write-Log "      ERROR: Could not add to group $Group" "Red"
+                    }
+                }
+            } catch {
+                Write-Log "    FAILED to create user $($User.SamAccountName): $($_.Exception.Message)" "Red"
+            }
+        } else {
+            Write-Log "    User Exists: $($User.SamAccountName)" "DarkGray"
         }
     }
 
-    # Recursion
-    foreach ($SubOU in $OUObject.sub_ous) {
-        New=ADStructure -OUObject $SubOU -ParentPath $CurrentOUPath
+    # 5. RECURSION: Process Sub-OUs if they exist
+    if ($OUData.SubOUs) {
+        foreach ($SubOU in $OUData.SubOUs) {
+            Process-ADStructure -OUData $SubOU -ParentPath $CurrentOUPath
+        }
     }
 }
 
-# START PROCESS
-Write-Host "--- Pass 1: Creating Hierarchy ---" -ForegroundColor Cyan
-foreach ($TopLevelOU in $Config) { New=ADStructure -OUObject $TopLevelOU -ParentPath $DomainRoot }
-
-Write-Host "--- Pass 2: Applying Cross-OU Memberships ---" -ForegroundColor Cyan
-foreach ($Item in $GlobalMembershipQueue) {
-    foreach ($Member in $Item.Members) {
-        try {
-            # Add-ADGroupMember supports cross-OU lookup by SamAccountName automatically
-            Add-ADGroupMember -Identity $Item.GroupName -Members $Member -ErrorAction Stop
-            Write-Host "Linked $Member to $($Item.GroupName)" -ForegroundColor Green
-        } catch {
-            Write-Warning "Could not link $Member to $($Item.GroupName): $($_.Exception.Message)"
-        }
+# --- SCRIPT EXECUTION ---
+if (Test-Path $JsonPath) {
+    Write-Log "--- Starting AD Build ---" "Green"
+    $Data = Get-Content -Raw -Path $JsonPath | ConvertFrom-Json
+    
+    foreach ($RootOU in $Data.OUs) {
+        Process-ADStructure -OUData $RootOU -ParentPath $RootOU.Path
     }
+    Write-Log "--- Build Complete ---" "Green"
+} else {
+    Write-Error "JSON file not found at $JsonPath"
 }

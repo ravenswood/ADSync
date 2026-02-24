@@ -1,72 +1,156 @@
-[
-  {
-    "Name": "Corporate_HQ",
-    "groups": [
-      {
-        "Name": "All_Employees",
-        "Category": "Security",
-        "Scope": "Global",
-        "members": ["j.doe", "s.clark", "a.tech"]
-      }
-    ],
-    "sub_ous": [
-      {
-        "Name": "Human_Resources",
-        "users": [
-          {
-            "SamAccountName": "s.clark",
-            "FirstName": "Sarah",
-            "LastName": "Clark"
-          }
-        ],
-        "groups": [
-          {
-            "Name": "HR_Managers",
-            "Category": "Security",
-            "Scope": "Global",
-            "members": ["s.clark"]
-          }
-        ]
-      },
-      {
-        "Name": "Information_Technology",
-        "users": [
-          {
-            "SamAccountName": "j.doe",
-            "FirstName": "John",
-            "LastName": "Doe"
-          },
-          {
-            "SamAccountName": "a.tech",
-            "FirstName": "Alex",
-            "LastName": "Tech"
-          }
-        ],
-        "groups": [
-          {
-            "Name": "Domain_Admins_Helper",
-            "Category": "Security",
-            "Scope": "Universal",
-            "members": ["j.doe", "s.clark"] 
-          }
-        ],
-        "sub_ous": [
-          {
-            "Name": "Servers",
-            "groups": [
-              {
-                "Name": "Server_Admins",
-                "Category": "Security",
-                "Scope": "Global",
-                "members": ["a.tech"]
-              }
-            ]
-          },
-          {
-            "Name": "Workstations"
-          }
-        ]
-      }
-    ]
-  }
-]
+{
+  "OUs": [
+    {
+      "Name": "Tier_1",
+      "Path": "DC=jml,DC=local",
+      "SubOUs": [
+        {
+          "Name": "NG",        
+          "SubOUs": [
+            {
+              "Name": "T1_DL_Groups",
+              "Groups": ["T1_DL_NG_Admins","T1_DL_NG_Users","T1_DL_NG_VMs"]
+            },
+            {
+              "Name": "T1_G_Groups",
+              "Groups": ["T1_G_NG_Admins","T1_G_NG_Users","T1_G_NG_VMs"]
+            },        
+            {
+              "Name": "T1_Admins",
+              "Users": [
+                {
+                  "SamAccountName": "T1_NG_Admin",
+                  "FirstName": "NGAdmin",
+                  "LastName": "User",
+                  "MemberOf": ["T1_DL_NG_Admins","T1_DL_NG_Users"]
+                }
+              ]
+            },        
+            {
+              "Name": "T1_Users",
+              "Users": [
+                {
+                  "SamAccountName": "T1_NG_User",
+                  "FirstName": "NGuser",
+                  "LastName": "User",
+                  "MemberOf": ["T1_DL_NG_Admins","T1_DL_NG_Users","T1_G_NG_Admins","T1_G_NG_Users"]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "Name": "Siemens",        
+          "SubOUs": [
+            {
+              "Name": "T1_DL_Groups",
+              "Groups": ["T1_DL_SCS_Admins","T1_DL_SCS_Users","T1_DL_SCS_VMs"]
+            },
+            {
+              "Name": "T1_G_Groups",
+              "Groups": ["T1_G_SCS_Admins","T1_G_SCS_Users","T1_G_SCS_VMs"]
+            },        
+            {
+              "Name": "T1_Admins",
+              "Users": [
+                {
+                  "SamAccountName": "T1_SCS_Admin",
+                  "FirstName": "SCSAdmin",
+                  "LastName": "User",
+                  "MemberOf": ["T1_DL_SCS_Admins","T1_DL_SCS_Users"]
+                }
+              ]
+            },        
+            {
+              "Name": "T1_Users",
+              "Users": [
+                {
+                  "SamAccountName": "T1_SCS_User",
+                  "FirstName": "SCSuser",
+                  "LastName": "User",
+                  "MemberOf": ["T1_DL_SCS_Admins","T1_DL_SCS_Users","T1_G_SCS_Admins","T1_G_SCS_Users"]
+                }
+              ]
+            }
+          ]
+        }        
+      ]
+    },
+    {
+      "Name": "Tier_2",
+      "Path": "DC=jml,DC=local",
+      "SubOUs": [
+        {
+          "Name": "NG",        
+          "SubOUs": [
+            {
+              "Name": "T2_DL_Groups",
+              "Groups": ["T2_DL_NG_Admins","T2_DL_NG_Users","T2_DL_NG_VMs"]
+            },
+            {
+              "Name": "T2_G_Groups",
+              "Groups": ["T2_G_NG_Admins","T2_G_NG_Users","T2_G_NG_VMs"]
+            },        
+            {
+              "Name": "T2_Admins",
+              "Users": [
+                {
+                  "SamAccountName": "T2_NG_Admin",
+                  "FirstName": "NGAdmin",
+                  "LastName": "User",
+                  "MemberOf": ["T2_DL_NG_Admins","T2_DL_NG_Users"]
+                }
+              ]
+            },        
+            {
+              "Name": "T2_Users",
+              "Users": [
+                {
+                  "SamAccountName": "T2_NG_User",
+                  "FirstName": "NGuser",
+                  "LastName": "User",
+                  "MemberOf": ["T2_DL_NG_Admins","T2_DL_NG_Users","T2_G_NG_Admins","T2_G_NG_Users"]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "Name": "Siemens",        
+          "SubOUs": [
+            {
+              "Name": "T2_DL_Groups",
+              "Groups": ["T2_DL_SCS_Admins","T2_DL_SCS_Users","T2_DL_SCS_VMs"]
+            },
+            {
+              "Name": "T2_G_Groups",
+              "Groups": ["T2_G_SCS_Admins","T2_G_SCS_Users","T2_G_SCS_VMs"]
+            },        
+            {
+              "Name": "T2_Admins",
+              "Users": [
+                {
+                  "SamAccountName": "T2_SCS_Admin",
+                  "FirstName": "SCSAdmin",
+                  "LastName": "User",
+                  "MemberOf": ["T2_DL_SCS_Admins","T2_DL_SCS_Users"]
+                }
+              ]
+            },        
+            {
+              "Name": "T2_Users",
+              "Users": [
+                {
+                  "SamAccountName": "T2_SCS_User",
+                  "FirstName": "SCSuser",
+                  "LastName": "User",
+                  "MemberOf": ["T2_DL_SCS_Admins","T2_DL_SCS_Users","T2_G_SCS_Admins","T2_G_SCS_Users"]
+                }
+              ]
+            }
+          ]
+        }        
+      ]
+    }
+  ]
+}

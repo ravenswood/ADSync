@@ -22,7 +22,9 @@
 
 param (
     [Parameter(Mandatory=$false)]
-    [string]$FilterName
+    [string]$FilterName,
+    [Parameter(Mandatory=$false)]
+    [string]$OUPrefix
 )
 
 . "$PSScriptRoot\ADSyncLibrary.ps1"

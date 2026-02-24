@@ -9,7 +9,9 @@ $Suppliers = @(
     "Balfour",
     "Siemens",
     "GE",
-    "GSS",    
+    "GSS",   
+    "Capula",
+    "NG", 
     "Hitachi"
 )
 
@@ -21,5 +23,6 @@ foreach ($supplier in $Suppliers) {
     Write-Host "Processing supplier: $supplier" -ForegroundColor Cyan
     
     # Run the external script and pass the current array value as a parameter
-    & $ScriptPath $supplier
+    & $ScriptPath -FilterName $supplier -OUPrefix Tier_1
+    & $ScriptPath -FilterName $supplier -OUPrefix Tier_2
 }
