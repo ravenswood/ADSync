@@ -217,7 +217,7 @@ if (![string]::IsNullOrWhiteSpace($FilterName)) {
 if (![string]::IsNullOrWhiteSpace($OUPrefix)) {
     Write-Synclog "OU Prefix is $OUPrefix" -Category "OU"
     $TargetOU = "OU=$OUPrefix,$BaseOU"
-    $ExportDir = "$ParentDir\Export\$OUPrefix\$FilterName"   
+    $ExportDir = "$ParentDir\Export\$FilterName\$OUPrefix"   
 } 
 else
     { $TargetOU = $BaseOU }
